@@ -10,9 +10,11 @@ records every change in an audit log that shows if anyone edits it.
 > Windward Freight & Shipping Ltd, its staff and its directory are invented, for the demo.
 > Kingstown and Bequia are real.
 
-**Status: Phase 2 of 4.** The engine, approvals for admin rights, and access reviews, working
-on a practice directory. Coming next: an HTML report (Phase 3), and an Active Directory
-connector plus CI (Phase 4).
+**Status: Phase 3 of 4.** The engine, approvals for admin rights, access reviews and an HTML
+report, working on a practice directory. Coming next: an Active Directory connector plus CI
+(Phase 4).
+
+![The Turnstile report: status tiles, the next run's plan, approvals waiting](docs/report.jpg)
 
 ## Run it
 
@@ -43,6 +45,9 @@ Revoke-TurnstileAccess  -DirectoryPath .\demo-output\directory.json -Id APR-0003
 # Access review
 Get-TurnstileAccessReview -DirectoryPath .\demo-output\directory.json -HrPath .\data\hr\2026-10-23.csv | Show-TurnstileAccessReview
 Get-TurnstileAccessReview -DirectoryPath .\demo-output\directory.json | Export-TurnstileAccessReview -Folder .\review
+
+# The report
+Export-TurnstileReport -DirectoryPath .\demo-output\directory.json -HrPath .\data\hr\2026-10-23.csv -Path .\report.html
 ```
 
 `-WhatIf` and `-Confirm` work as they do for any PowerShell command. `-Today 2026-10-19` runs
@@ -152,6 +157,29 @@ grouped by manager with a blank **Decision** column for them to sign off. Any ce
 with `=`, `+`, `-` or `@` gets a leading `'`, so a job title like `=HYPERLINK(...)` can't run as
 a formula when the file is opened in Excel (CSV injection). The review changes nothing.
 
+## The report
+
+`Export-TurnstileReport` writes one HTML page that opens in any browser, on a phone, and
+prints cleanly:
+
+- **Status tiles:** is the audit log intact, how many changes the next run will make, approvals
+  waiting, review findings
+- **What the next run will do**, person by person, with any problems in the export
+- **Approvals** waiting for a decision (and how long they've waited), and recent decisions
+- **The access review** findings, and **who holds admin rights** and on what basis
+- **Activity:** the latest audit entries, with a green "all entries checked" or a red
+  "fails its check"
+
+| Dark mode | On a phone |
+|---|---|
+| ![The report in dark mode](docs/report-dark.jpg) | ![The report on a phone](docs/report-phone.jpg) |
+
+**Safe to open and to email.** It's a single file: no scripts, nothing loaded from the internet,
+and a Content-Security-Policy that forbids scripts outright. Every value from the directory, the
+HR export and the audit log is HTML-encoded, so a job title of `<script>alert(1)</script>`
+appears as text. A test plants that title (and an `<img onerror>`) and checks neither survives;
+turning the encoding off makes it fail.
+
 ## The audit log
 
 One line per event: runs starting and finishing, every change (with old and new values), every
@@ -187,11 +215,12 @@ HR exports from `data\hr\`:
 | Mon 18 Jan 2027 | three approvals have run out: the access is removed and new requests raised; the contractor's end date has passed, so her account is switched off |
 
 Then it checks the audit log, edits a copy to blame the wrong person, and shows the check
-catching it.
+catching it. Finally it writes `demo-output\report.html` (and a snapshot from the first
+Friday, `report-2026-10-23.html`).
 
 ## Tests
 
-88 Pester tests:
+94 Pester tests:
 
 - **Every rule above**, one scenario at a time: joiners (including a manager and their new
   report joining the same day), movers, name changes, contractors, leavers, 30-day deletion,
@@ -203,6 +232,8 @@ catching it.
   date and a tampered audit log are all caught.
 - **The access review:** each kind of finding, where each membership came from, that it changes
   nothing, and that exported CSVs can't carry Excel formulas.
+- **The report:** every section, a stopped run and a broken audit log shown plainly, HTML and
+  script injection, the security policy, no outside requests, and that it changes nothing.
 - **Accounts switched off by hand stay off.** Turnstile only switches back on what it switched
   off itself (a leaver, or a new starter). An account locked during a security incident isn't
   quietly re-enabled the next morning. (A test for the access review found this one.)
@@ -228,6 +259,7 @@ Turnstile/
     Sync.ps1            Get-TurnstilePlan, Invoke-TurnstileSync, the new-starter note
     Approvals.ps1       Get-TurnstileApproval, Approve-, Deny- and Revoke-TurnstileAccess
     Review.ps1          Get-, Show- and Export-TurnstileAccessReview
+    Report.ps1          Export-TurnstileReport: the HTML page
     HrFeed.ps1          Import-TurnstileHrFeed: reading and checking the export
     Show.ps1            Show-TurnstilePlan
   Private/

@@ -82,7 +82,7 @@ function Approve-TurnstileAccess {
         $request.expiresOn = Format-TurnstileDate $Today.Date.AddDays($length)
         @{ Name = 'ApprovalGranted'
            Detail = "$($request.id): $($request.group) for $($request.username) approved by $ApprovedBy ($Ticket) until $($request.expiresOn)"
-           Data = @{ id = $request.id; employeeId = $request.employeeId; group = $request.group; expiresOn = $request.expiresOn; ticket = $Ticket; by = $ApprovedBy } }
+           Data = @{ id = $request.id; employeeId = $request.employeeId; group = $request.group; expiresOn = $request.expiresOn; ticket = $Ticket; by = $ApprovedBy; day = $request.decidedOn } }
     }
 }
 
@@ -112,7 +112,7 @@ function Deny-TurnstileAccess {
         $request.decidedOn = Format-TurnstileDate $Today
         $request.note = $Reason
         @{ Name = 'ApprovalDenied'; Detail = "$($request.id): $($request.group) for $($request.username) denied by ${DeniedBy}: $Reason"
-           Data = @{ id = $request.id; by = $DeniedBy } }
+           Data = @{ id = $request.id; by = $DeniedBy; day = $request.decidedOn } }
     }
 }
 
@@ -141,6 +141,6 @@ function Revoke-TurnstileAccess {
         $request.decidedOn = Format-TurnstileDate $Today
         $request.note = $Reason
         @{ Name = 'ApprovalRevoked'; Detail = "$($request.id): $($request.group) for $($request.username) revoked by ${RevokedBy}: $Reason"
-           Data = @{ id = $request.id; by = $RevokedBy } }
+           Data = @{ id = $request.id; by = $RevokedBy; day = $request.decidedOn } }
     }
 }

@@ -137,6 +137,7 @@ $review = Get-TurnstileAccessReview -DirectoryPath $directoryPath -HrPath (& $hr
 $review | Show-TurnstileAccessReview
 $files = $review | Export-TurnstileAccessReview -Folder (Join-Path $out 'review')
 Write-Host "  For managers to sign off: demo-output\review\$(Split-Path -Leaf $files[1]) (one row per membership, with a Decision column)" -ForegroundColor DarkGray
+$null = Export-TurnstileReport -DirectoryPath $directoryPath -HrPath (& $hr '2026-10-23') -Today '2026-10-23' -Path (Join-Path $out 'report-2026-10-23.html')
 
 Show-Day 'Monday 26 October: Zoë starts'
 Invoke-TurnstileSync -HrPath (& $hr '2026-10-26') -DirectoryPath $directoryPath -Today '2026-10-26' | Show-TurnstilePlan
@@ -163,5 +164,11 @@ $lines -replace '"target":"desmond.hazell","detail":"Left on', '"target":"kevin.
 $bad = Test-TurnstileAuditLog -Path $tampered
 Write-Host "  Someone edits a copy to blame a different account: chain intact: $($bad.Valid). $($bad.Problem)" -ForegroundColor Yellow
 
+Show-Day 'The report'
+$null = Export-TurnstileReport -DirectoryPath $directoryPath -HrPath (& $hr '2027-01-18') -Today '2027-01-18' -Path (Join-Path $out 'report.html')
+Write-Host "  One page with the next run's plan, approvals waiting, the access review, who holds admin rights,"
+Write-Host "  and the audit trail: demo-output\report.html (open it in any browser)."
+Write-Host "  Also a snapshot from the Friday of the first week: demo-output\report-2026-10-23.html" -ForegroundColor DarkGray
+
 Write-Host ''
-Write-Host 'Everything above is in demo-output\: the directory, approvals, the audit log, the new-starter notes and the review.'
+Write-Host 'Everything above is in demo-output\: the directory, approvals, the audit log, the new-starter notes, the review and the report.'

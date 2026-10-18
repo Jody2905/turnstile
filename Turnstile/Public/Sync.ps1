@@ -88,7 +88,7 @@ function Invoke-TurnstileSync {
     }
 
     & $audit 'RunStarted' '' "HR export $(Split-Path -Leaf $HrPath) for $(Format-TurnstileDate $plan.Today)" @{
-        hrRows = $plan.HrRows; ready = @($plan.Actions | Where-Object Status -eq 'Ready').Count; issues = $plan.Issues.Count }
+        day = (Format-TurnstileDate $plan.Today); hrRows = $plan.HrRows; ready = @($plan.Actions | Where-Object Status -eq 'Ready').Count; issues = $plan.Issues.Count }
     if ($plan.Blocked) {
         if (-not $Force) {
             $result.Refused = $true
