@@ -27,8 +27,8 @@ function Get-TurnstileAccessReview {
     $Today = $Today.Date
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
-    $store = Open-TurnstileApprovals -Path $paths.Approvals
+    $paths = Get-TurnstileStatePath -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
+    $store = Open-TurnstileApprovalStore -Path $paths.Approvals
     $view = Get-TurnstileApprovalView -Store $store -AuditPath $paths.Audit
     $managedGroups = Get-TurnstileManagedGroup $policy
     $soon = $Today.AddDays([int] $policy.review.soonDays)
@@ -53,7 +53,7 @@ function Get-TurnstileAccessReview {
         if (-not $managed) {
             & $flag 'Low' 'No employee ID' $u.username "$($u.username) ($($u['description'])) isn't linked to a person, so Turnstile never manages it. Check it still has an owner and is still needed."
         } elseif (-not $u.enabled -and $groups.Count) {
-            $startingSoon = $record -and (Get-TurnstilePhase $record $Today $policy.prestartDays) -eq 'prestart'
+            $startingSoon = $record -and (Get-TurnstilePhase -Record $record -Today $Today -PrestartDays $policy.prestartDays) -eq 'prestart'
             if ($u.disabledOn) {
                 & $flag 'High' 'Disabled with access' $u.username "$($u.username) was disabled on $($u.disabledOn) but is still in $($groups.Count) group(s): $($groups -join ', ')."
             } elseif (-not $startingSoon) {
@@ -159,6 +159,7 @@ function Export-TurnstileAccessReview {
         The paths of the two files.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param([Parameter(Mandatory, ValueFromPipeline)] $Review, [Parameter(Mandatory)][string] $Folder)
     process {
         if (-not (Test-Path -LiteralPath $Folder)) { New-Item -ItemType Directory -Path $Folder | Out-Null }
@@ -167,7 +168,8 @@ function Export-TurnstileAccessReview {
         $access = Join-Path $Folder "access-review-$day.csv"
         $Review.Findings | ForEach-Object { ConvertTo-TurnstileSafeCsvRow $_ } | Export-Csv -LiteralPath $findings -NoTypeInformation -Encoding utf8BOM
         $Review.Entries | ForEach-Object { ConvertTo-TurnstileSafeCsvRow $_ } | Export-Csv -LiteralPath $access -NoTypeInformation -Encoding utf8BOM
-        $findings, $access
+        Write-Output $findings
+        Write-Output $access
     }
 }
 

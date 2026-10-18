@@ -18,20 +18,20 @@ function Get-TurnstilePlan {
     )
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
-    $view = Get-TurnstileApprovalView -Store (Open-TurnstileApprovals -Path $paths.Approvals) -AuditPath $paths.Audit
+    $paths = Get-TurnstileStatePath -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
+    $view = Get-TurnstileApprovalView -Store (Open-TurnstileApprovalStore -Path $paths.Approvals) -AuditPath $paths.Audit
     $feed = Import-TurnstileHrFeed -Path $HrPath -Policy $policy
     New-TurnstilePlan -Policy $policy -Directory $directory -Feed $feed -Today $Today -Approvals $view
 }
 
-function Get-TurnstilePaths {
+function Get-TurnstileStatePath {
     # The audit log, approvals and new-starter notes live next to the directory file unless told otherwise.
-    param($Directory, [string] $ApprovalPath, [string] $AuditPath, [string] $CredentialPath)
+    param($Directory, [string] $ApprovalPath, [string] $AuditPath, [string] $NotesPath)
     $folder = Split-Path -Parent $Directory.Path
     [pscustomobject]@{
         Audit       = $(if ($AuditPath) { $AuditPath } else { Join-Path $folder 'audit.log' })
         Approvals   = $(if ($ApprovalPath) { $ApprovalPath } else { Join-Path $folder 'approvals.json' })
-        Credentials = $(if ($CredentialPath) { $CredentialPath } else { Join-Path $folder 'new-starter-notes' })
+        Notes       = $(if ($NotesPath) { $NotesPath } else { Join-Path $folder 'new-starter-notes' })
     }
 }
 
@@ -51,7 +51,7 @@ function Invoke-TurnstileSync {
         needing approval.
 
         Each new account gets a random temporary password that must be changed at first
-        sign-in. It's written once, to a note in -CredentialPath for the manager, and
+        sign-in. It's written once, to a note for the manager in -NotesPath, and
         never to the audit log or the directory file.
     .EXAMPLE
         Invoke-TurnstileSync -HrPath .\data\hr\2026-10-19.csv -DirectoryPath .\directory.json -WhatIf
@@ -63,25 +63,25 @@ function Invoke-TurnstileSync {
         [string] $PolicyPath = $script:DefaultPolicy,
         [string] $AuditPath,
         [string] $ApprovalPath,
-        [string] $CredentialPath,
+        [string] $NotesPath,
         [datetime] $Today = (Get-Date).Date,
         [switch] $Force,
         [string] $Reason
     )
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath -CredentialPath $CredentialPath
+    $paths = Get-TurnstileStatePath -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath -NotesPath $NotesPath
     $AuditPath = $paths.Audit
-    $CredentialPath = $paths.Credentials
-    $store = Open-TurnstileApprovals -Path $paths.Approvals
+    $NotesPath = $paths.Notes
+    $store = Open-TurnstileApprovalStore -Path $paths.Approvals
     $view = Get-TurnstileApprovalView -Store $store -AuditPath $AuditPath
     $feed = Import-TurnstileHrFeed -Path $HrPath -Policy $policy
     $plan = New-TurnstilePlan -Policy $policy -Directory $directory -Feed $feed -Today $Today -Approvals $view
 
     $dryRun = [bool] $WhatIfPreference
     $runId = 'run-{0}-{1}' -f (Get-Date -Format 'yyyyMMddHHmmss'), (Get-Random -Maximum 99999).ToString('00000')
-    $audit = { param($event, $target, $detail, $data = @{})
-        if (-not $dryRun) { Add-TurnstileAuditEntry -Path $AuditPath -RunId $runId -Event $event -Target $target -Detail $detail -Data $data } }
+    $audit = { param($name, $target, $detail, $data = @{})
+        if (-not $dryRun) { Add-TurnstileAuditEntry -Path $AuditPath -RunId $runId -EventName $name -Target $target -Detail $detail -Data $data } }
     $result = [pscustomobject]@{
         RunId = $runId; Plan = $plan; Applied = 0; Failed = 0; Skipped = 0; Refused = $false; DryRun = $dryRun
         Errors = [Collections.Generic.List[string]]::new(); NewStarterNotes = [Collections.Generic.List[string]]::new()
@@ -105,9 +105,11 @@ function Invoke-TurnstileSync {
             if ($action.Status -ne 'Ready') { continue }
             if ($failedUsers.Contains($action.Username)) { $result.Skipped++; continue }
             if (-not $PSCmdlet.ShouldProcess($action.Username, $action.Detail)) { continue }
+            # The password exists as plain text only long enough to write the manager's note.
             $password = if ($action.Kind -eq 'Create') { New-TurnstilePassword } else { $null }
+            $secure = if ($password) { ConvertTo-TurnstileSecureString $password } else { $null }
             try {
-                Invoke-TurnstileDirectoryAction -Directory $directory -Action $action -Today $plan.Today -Password $password
+                Invoke-TurnstileDirectoryAction -Directory $directory -Action $action -Today $plan.Today -InitialPassword $secure
             } catch {
                 [void] $failedUsers.Add($action.Username)
                 $result.Failed++
@@ -119,7 +121,7 @@ function Invoke-TurnstileSync {
             $data = @{}
             if ($action.Kind -eq 'Create') {
                 $data = @{ employeeId = $action.EmployeeId; ou = $action.Data.ou; enabled = $action.Data.enabled }
-                $result.NewStarterNotes.Add((Write-TurnstileStarterNote -Folder $CredentialPath -Action $action -Password $password -Policy $policy -Today $plan.Today))
+                $result.NewStarterNotes.Add((Write-TurnstileStarterNote -Folder $NotesPath -Action $action -NoteText $password -Policy $policy -Today $plan.Today))
                 $detail = "$($action.Detail). Temporary password issued (not recorded here); must be changed at first sign-in."
             } else {
                 $detail = $action.Detail
@@ -136,10 +138,10 @@ function Invoke-TurnstileSync {
                 & $audit 'ApprovalEnded' $action.Username "$($request.id): $($action.Data.endStatus.ToLower()), access to $($request.group) removed" @{ id = $request.id; status = $request.status }
             }
         }
-        if (-not $dryRun) { Update-TurnstileApprovalRequests -Store $store -Plan $plan -Audit $audit }
+        if (-not $dryRun) { Update-TurnstileApprovalRequest -Store $store -Plan $plan -Audit $audit }
     } finally {
         if (-not $dryRun -and $result.Applied -gt 0) { Save-TurnstileDirectory -Directory $directory }
-        if (-not $dryRun -and $store.Changed) { Save-TurnstileApprovals -Store $store }
+        if (-not $dryRun -and $store.Changed) { Save-TurnstileApprovalStore -Store $store }
     }
     & $audit 'RunCompleted' '' "Applied $($result.Applied), failed $($result.Failed), skipped $($result.Skipped); $($plan.Summary.NeedsApproval) waiting for approval" @{
         applied = $result.Applied; failed = $result.Failed; skipped = $result.Skipped; needsApproval = $plan.Summary.NeedsApproval }
@@ -148,7 +150,7 @@ function Invoke-TurnstileSync {
 
 function Write-TurnstileStarterNote {
     # The manager's note for a new starter: the only place the temporary password is written.
-    param($Folder, $Action, $Password, $Policy, [datetime] $Today)
+    param($Folder, $Action, [string] $NoteText, $Policy, [datetime] $Today)
     if (-not (Test-Path -LiteralPath $Folder)) { New-Item -ItemType Directory -Path $Folder | Out-Null }
     $path = Join-Path $Folder "$($Action.Username).txt"
     $starts = if ($Action.Data.enabled) { 'The account is ready to use now.' } else { 'The account stays switched off until their first day.' }
@@ -157,7 +159,7 @@ Welcome to $($Policy.organisation): sign-in details for $($Action.Data.displayNa
 
 Username:            $($Action.Username)
 Email:               $($Action.Data.mail)
-Temporary password:  $Password
+Temporary password:  $NoteText
 
 $starts
 They'll be asked to choose their own password the first time they sign in.
@@ -168,7 +170,8 @@ Created by Turnstile on $(Format-TurnstileDate $Today).
     $path
 }
 
-function Update-TurnstileApprovalRequests {
+function Update-TurnstileApprovalRequest {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Internal: only called by Invoke-TurnstileSync, which handles -WhatIf itself.')]
     # Raise a request for everything waiting on approval that hasn't got one, and cancel
     # pending requests nobody needs any more (they left, or their job changed).
     param($Store, $Plan, $Audit)

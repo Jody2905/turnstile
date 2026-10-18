@@ -22,6 +22,7 @@ function Get-TurnstilePhase {
 }
 
 function New-TurnstilePlan {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Makes a new value; changes nothing.')]
     param(
         [Parameter(Mandatory)] $Policy,
         [Parameter(Mandatory)] $Directory,
@@ -62,7 +63,7 @@ function New-TurnstilePlan {
     $newNames = @{}
     foreach ($r in $records) {
         if ($byEmployee.ContainsKey($r.EmployeeId)) { continue }
-        $phase = Get-TurnstilePhase $r $Today $Policy.prestartDays
+        $phase = Get-TurnstilePhase -Record $r -Today $Today -PrestartDays $Policy.prestartDays
         if ($phase -notin 'prestart', 'active') { continue }
         $first = if ($r.PreferredName) { $r.PreferredName } else { $r.FirstName }
         $name = New-TurnstileUsername -First $first -Last $r.LastName -Taken $taken -MaxLength $Policy.usernameMaxLength
@@ -86,7 +87,7 @@ function New-TurnstilePlan {
     foreach ($r in $records) { if (-not $newNames.ContainsKey($r.EmployeeId)) { $ordered.Add($r) } }
 
     foreach ($r in $ordered) {
-        $phase = Get-TurnstilePhase $r $Today $Policy.prestartDays
+        $phase = Get-TurnstilePhase -Record $r -Today $Today -PrestartDays $Policy.prestartDays
         $user = $byEmployee[$r.EmployeeId]
         $first = if ($r.PreferredName) { $r.PreferredName } else { $r.FirstName }
         $location = $Policy.locations[$r.Location]
@@ -294,6 +295,7 @@ function Add-TurnstileGrant {
 
 function New-TurnstileRemoval {
     # Data for removing a group; if a current approval covered it, that approval ends too.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Makes a new value; changes nothing.')]
     param([string] $Group, $Approvals, [string] $EmployeeId, [datetime] $Today, [string] $Title)
     $data = @{ group = $Group }
     $st = Get-TurnstileApprovalState -View $Approvals -EmployeeId $EmployeeId -Group $Group -Today $Today -Title $Title

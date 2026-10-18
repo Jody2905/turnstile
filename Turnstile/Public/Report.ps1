@@ -1,4 +1,4 @@
-function Export-TurnstileReport {
+﻿function Export-TurnstileReport {
     <#
     .SYNOPSIS
         Write one HTML page showing where things stand: the next run's plan, approvals waiting,
@@ -26,7 +26,7 @@ function Export-TurnstileReport {
     $Today = $Today.Date
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
+    $paths = Get-TurnstileStatePath -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
     $common = @{ DirectoryPath = $DirectoryPath; PolicyPath = $PolicyPath; ApprovalPath = $paths.Approvals; AuditPath = $paths.Audit; Today = $Today }
     $plan = if ($HrPath) { Get-TurnstilePlan -HrPath $HrPath @common } else { $null }
     $reviewArgs = $common.Clone(); if ($HrPath) { $reviewArgs.HrPath = $HrPath }
@@ -179,7 +179,9 @@ $($script:ReportCss)
     }
     if (Test-Path -LiteralPath $paths.Audit) {
         $lines = @(Get-Content -LiteralPath $paths.Audit -Tail $AuditEntries)
-        $parsed = foreach ($line in $lines) { try { $line.Substring(65) | ConvertFrom-Json } catch { } }
+        $parsed = foreach ($line in $lines) {
+            try { $line.Substring(65) | ConvertFrom-Json } catch { Write-Verbose "Skipping an audit line that isn't valid: $($_.Exception.Message)" }
+        }
         $runDays = @{}
         foreach ($line in [IO.File]::ReadAllLines((Resolve-Path -LiteralPath $paths.Audit).Path)) {
             if ($line -like '*"event":"RunStarted"*') { $x = $line.Substring(65) | ConvertFrom-Json; if ($x.data.PSObject.Properties['day']) { $runDays[$x.run] = $x.data.day } }

@@ -9,7 +9,8 @@ function Open-TurnstileDirectory {
     param([Parameter(Mandatory)][string] $Path)
     if (-not (Test-Path -LiteralPath $Path)) { throw "Directory file not found: $Path" }
     $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
-    if (-not $state.Contains('users') -or -not $state.Contains('groups')) { throw "$Path isn't a Turnstile directory file." }
+    if ($state.Contains('kind') -and $state.kind -eq 'ActiveDirectory') { return Connect-TurnstileActiveDirectory -Settings $state -Path $Path }
+    if (-not $state.Contains('users') -or -not $state.Contains('groups')) { throw "$Path isn't a Turnstile directory file or an Active Directory connection file." }
     $state.users = [Collections.Generic.List[object]]::new([object[]] @($state.users))
     foreach ($u in $state.users) { $u.groups = @($u.groups) }
     [pscustomobject]@{ Kind = 'Simulated'; Path = (Resolve-Path -LiteralPath $Path).Path; State = $state }
@@ -18,6 +19,7 @@ function Open-TurnstileDirectory {
 function Save-TurnstileDirectory {
     # Write to a temporary file, then swap it in, so a crash can't leave half a file.
     param([Parameter(Mandatory)] $Directory)
+    if ($Directory.Kind -eq 'ActiveDirectory') { return }   # every change already went straight to AD
     $json = $Directory.State | ConvertTo-Json -Depth 8
     $temp = "$($Directory.Path).tmp"
     Set-Content -LiteralPath $temp -Value $json -Encoding utf8NoBOM
@@ -26,6 +28,7 @@ function Save-TurnstileDirectory {
 
 function New-TurnstileDirectoryFile {
     # An empty directory with the given groups (used by the demo and the tests).
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Makes a new value; changes nothing.')]
     param(
         [Parameter(Mandatory)][string] $Path,
         [Parameter(Mandatory)][string] $Domain,
@@ -56,8 +59,12 @@ function Invoke-TurnstileDirectoryAction {
         [Parameter(Mandatory)] $Directory,
         [Parameter(Mandatory)] $Action,
         [Parameter(Mandatory)][datetime] $Today,
-        [string] $Password
+        [securestring] $InitialPassword
     )
+    if ($Directory.Kind -eq 'ActiveDirectory') {
+        Invoke-TurnstileAdAction -Directory $Directory -Action $Action -Today $Today -InitialPassword $InitialPassword
+        return
+    }
     $users = $Directory.State.users
     $user = $users | Where-Object { $_.username -eq $Action.Username } | Select-Object -First 1
     if ($Action.Kind -ne 'Create' -and -not $user) { throw "$($Action.Username) isn't in the directory." }
@@ -66,7 +73,7 @@ function Invoke-TurnstileDirectoryAction {
     switch ($Action.Kind) {
         'Create' {
             if ($user) { throw "$($Action.Username) already exists." }
-            if (-not $Password) { throw 'A new account needs a temporary password.' }
+            if (-not $InitialPassword) { throw 'A new account needs a temporary password.' }
             $d = $Action.Data
             $users.Add([ordered]@{
                 username           = $Action.Username

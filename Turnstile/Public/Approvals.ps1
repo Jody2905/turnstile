@@ -12,8 +12,8 @@ function Get-TurnstileApproval {
         [ValidateSet('Pending', 'Approved', 'Rejected', 'Revoked', 'Expired', 'Ended', 'Cancelled')][string] $Status
     )
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath
-    $store = Open-TurnstileApprovals -Path $paths.Approvals
+    $paths = Get-TurnstileStatePath -Directory $directory -ApprovalPath $ApprovalPath
+    $store = Open-TurnstileApprovalStore -Path $paths.Approvals
     foreach ($r in $store.State.requests) {
         if ($Status -and $r.status -ne $Status) { continue }
         [pscustomobject]@{
@@ -27,20 +27,21 @@ function Get-TurnstileApproval {
 function Invoke-TurnstileDecision {
     # Shared by Approve, Deny and Revoke: check the decider, record the decision in the audit
     # log first (that's what makes it count), then in approvals.json.
-    param($DirectoryPath, $PolicyPath, $ApprovalPath, $AuditPath, $Id, $By, [datetime] $Today, [string[]] $From, [scriptblock] $Decide, $Cmdlet, $Verb)
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification = 'Calls ShouldProcess on the public command that called it, which declares SupportsShouldProcess.')]
+    param($DirectoryPath, $PolicyPath, $ApprovalPath, $AuditPath, $Id, $By, [string[]] $From, [scriptblock] $Decide, $Cmdlet, $Verb)
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
-    $store = Open-TurnstileApprovals -Path $paths.Approvals
+    $paths = Get-TurnstileStatePath -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
+    $store = Open-TurnstileApprovalStore -Path $paths.Approvals
     $request = $store.State.requests | Where-Object id -eq $Id | Select-Object -First 1
     if (-not $request) { throw "There's no approval request $Id." }
     if ($request.status -notin $From) { throw "$Id is $($request.status.ToLower()), so it can't be $Verb." }
     $why = Test-TurnstileApprover -Policy $policy -Directory $directory -Request $request -Approver $By
     if ($why) { throw $why }
     if (-not $Cmdlet.ShouldProcess("$Id ($($request.username), $($request.group))", $Verb)) { return }
-    $event = & $Decide $request $policy
-    Add-TurnstileAuditEntry -Path $paths.Audit -RunId "decision-$Id" -Event $event.Name -Target $request.username -Detail $event.Detail -Data $event.Data
-    Save-TurnstileApprovals -Store $store
+    $decision = & $Decide $request $policy
+    Add-TurnstileAuditEntry -Path $paths.Audit -RunId "decision-$Id" -EventName $decision.Name -Target $request.username -Detail $decision.Detail -Data $decision.Data
+    Save-TurnstileApprovalStore -Store $store
     Get-TurnstileApproval -DirectoryPath $DirectoryPath -ApprovalPath $paths.Approvals | Where-Object Id -eq $Id
 }
 
@@ -55,6 +56,7 @@ function Approve-TurnstileAccess {
     .EXAMPLE
         Approve-TurnstileAccess -DirectoryPath .\demo-output\directory.json -Id APR-0001 -ApprovedBy dwight.robertson -Ticket CHG-1042
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Used inside the -Decide script block.')]
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory)][string] $DirectoryPath,
@@ -69,7 +71,7 @@ function Approve-TurnstileAccess {
         [datetime] $Today = (Get-Date).Date
     )
     Invoke-TurnstileDecision -DirectoryPath $DirectoryPath -PolicyPath $PolicyPath -ApprovalPath $ApprovalPath -AuditPath $AuditPath `
-        -Id $Id -By $ApprovedBy -Today $Today -From 'Pending' -Cmdlet $PSCmdlet -Verb 'approved' -Decide {
+        -Id $Id -By $ApprovedBy -From 'Pending' -Cmdlet $PSCmdlet -Verb 'approved' -Decide {
         param($request, $policy)
         if ($Ticket -notmatch $policy.approvals.ticketPattern) { throw "Ticket '$Ticket' doesn't look like a change ticket (for example CHG-1042)." }
         $length = if ($Days) { $Days } else { [int] $policy.approvals.defaultDays }
@@ -92,6 +94,7 @@ function Deny-TurnstileAccess {
         Turn down a request. It isn't asked again unless the person's job changes.
         Turning down a "confirm existing access" request removes that access on the next run.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Used inside the -Decide script block.')]
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory)][string] $DirectoryPath,
@@ -105,8 +108,8 @@ function Deny-TurnstileAccess {
     )
     if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Please give a reason.' }
     Invoke-TurnstileDecision -DirectoryPath $DirectoryPath -PolicyPath $PolicyPath -ApprovalPath $ApprovalPath -AuditPath $AuditPath `
-        -Id $Id -By $DeniedBy -Today $Today -From 'Pending' -Cmdlet $PSCmdlet -Verb 'denied' -Decide {
-        param($request, $policy)
+        -Id $Id -By $DeniedBy -From 'Pending' -Cmdlet $PSCmdlet -Verb 'denied' -Decide {
+        param($request)
         $request.status = 'Rejected'
         $request.decidedBy = $DeniedBy
         $request.decidedOn = Format-TurnstileDate $Today
@@ -121,6 +124,7 @@ function Revoke-TurnstileAccess {
     .SYNOPSIS
         Take back approved access before it expires. It's removed on the next run.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Used inside the -Decide script block.')]
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
         [Parameter(Mandatory)][string] $DirectoryPath,
@@ -134,8 +138,8 @@ function Revoke-TurnstileAccess {
     )
     if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Please give a reason.' }
     Invoke-TurnstileDecision -DirectoryPath $DirectoryPath -PolicyPath $PolicyPath -ApprovalPath $ApprovalPath -AuditPath $AuditPath `
-        -Id $Id -By $RevokedBy -Today $Today -From 'Approved' -Cmdlet $PSCmdlet -Verb 'revoked' -Decide {
-        param($request, $policy)
+        -Id $Id -By $RevokedBy -From 'Approved' -Cmdlet $PSCmdlet -Verb 'revoked' -Decide {
+        param($request)
         $request.status = 'Revoked'
         $request.decidedBy = $RevokedBy
         $request.decidedOn = Format-TurnstileDate $Today

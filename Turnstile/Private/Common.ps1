@@ -1,4 +1,4 @@
-# Small helpers used everywhere: names, dates, hashes and passwords.
+﻿# Small helpers used everywhere: names, dates, hashes and passwords.
 
 function ConvertTo-TurnstileAscii {
     # "Zoë" -> "Zoe": split accented letters into letter + accent, then drop the accents.
@@ -21,6 +21,7 @@ function New-TurnstileUsername {
           Shanice O'Garro  -> shanice.ogarro
           a second Kevin Browne -> kevin.browne2
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Makes a new value; changes nothing.')]
     param(
         [Parameter(Mandatory)][string] $First,
         [Parameter(Mandatory)][string] $Last,
@@ -52,6 +53,7 @@ function New-TurnstileUsername {
 function New-TurnstilePassword {
     # A random temporary password: 16 characters from a cryptographic random generator,
     # with upper case, lower case, digits and symbols, and no look-alikes (0/O, 1/l/I).
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Makes a new value; changes nothing.')]
     param([int] $Length = 16)
     $sets = @('ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!#$%*+-=?@')
     $all = -join $sets
@@ -64,6 +66,15 @@ function New-TurnstilePassword {
         $tmp = $chars[$i]; $chars[$i] = $chars[$j]; $chars[$j] = $tmp
     }
     -join $chars
+}
+
+function ConvertTo-TurnstileSecureString {
+    # The generated password as a SecureString, for the directory (Active Directory needs one).
+    param([Parameter(Mandatory)][string] $Text)
+    $secure = [securestring]::new()
+    foreach ($char in $Text.ToCharArray()) { $secure.AppendChar($char) }
+    $secure.MakeReadOnly()
+    $secure
 }
 
 function Get-TurnstileHash {

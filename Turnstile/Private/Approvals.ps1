@@ -13,7 +13,7 @@
 #            -> Revoked (taken back early: access removed)
 #            -> Ended (no longer needed: they left or changed job)
 
-function Open-TurnstileApprovals {
+function Open-TurnstileApprovalStore {
     param([Parameter(Mandatory)][string] $Path)
     $state = if (Test-Path -LiteralPath $Path) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable } else { $null }
     if (-not $state) { $state = [ordered]@{ nextId = 1; requests = @() } }
@@ -21,7 +21,7 @@ function Open-TurnstileApprovals {
     [pscustomobject]@{ Path = $Path; State = $state; Changed = $false }
 }
 
-function Save-TurnstileApprovals {
+function Save-TurnstileApprovalStore {
     param([Parameter(Mandatory)] $Store)
     $temp = "$($Store.Path).tmp"
     Set-Content -LiteralPath $temp -Value ($Store.State | ConvertTo-Json -Depth 6) -Encoding utf8NoBOM
@@ -30,6 +30,7 @@ function Save-TurnstileApprovals {
 }
 
 function New-TurnstileApprovalRequest {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Makes a new value; changes nothing.')]
     param([Parameter(Mandatory)] $Store, [Parameter(Mandatory)] $Action, [Parameter(Mandatory)][datetime] $Today, [string] $Title, [string] $Kind)
     $id = 'APR-{0:0000}' -f [int] $Store.State.nextId
     $Store.State.nextId = [int] $Store.State.nextId + 1

@@ -23,7 +23,7 @@ function Add-TurnstileAuditEntry {
     param(
         [Parameter(Mandatory)][string] $Path,
         [Parameter(Mandatory)][string] $RunId,
-        [Parameter(Mandatory)][string] $Event,
+        [Parameter(Mandatory)][string] $EventName,
         [string] $Target = '',
         [string] $Detail = '',
         [hashtable] $Data = @{}
@@ -33,7 +33,7 @@ function Add-TurnstileAuditEntry {
         seq    = $tail.Seq + 1
         at     = [DateTimeOffset]::Now.ToString('yyyy-MM-ddTHH:mm:ss.fffzzz', [Globalization.CultureInfo]::InvariantCulture)
         run    = $RunId
-        event  = $Event
+        event  = $EventName
         target = $Target
         detail = $Detail
         data   = $Data
