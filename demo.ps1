@@ -57,14 +57,14 @@ Write-Host 'Practice directory: demo-output\directory.json   Audit log: demo-out
 Show-Day 'Friday 16 October: Turnstile takes over the 19 existing staff'
 $run = Invoke-TurnstileSync -HrPath (& $hr '2026-10-16') -DirectoryPath $directoryPath -Today '2026-10-16'
 Write-Host "  $($run.Applied) changes applied quietly (accounts, groups). Three service accounts with no employee ID are never touched."
-# Access that was approved before Turnstile, and one permission someone added by hand.
+# Admin rights granted before Turnstile (with no approval on record), and one permission someone added by hand.
 Edit-Directory {
     param($s)
     ($s.users | Where-Object username -eq 'lystra.baptiste').groups += 'Finance Approvers'
     ($s.users | Where-Object username -eq 'ronald.cottle').groups += 'Payroll'
     ($s.users | Where-Object username -eq 'jerome.delves').groups += 'Ferry Terminal Project'
 }
-Write-Host '  Already approved: Lystra (Finance Approvers) and Ronald (Payroll).'
+Write-Host '  From before Turnstile, with no approval on record: Lystra (Finance Approvers) and Ronald (Payroll).'
 Write-Host '  Added by hand some time ago: Jerome, to Ferry Terminal Project (a group the policy knows nothing about).'
 
 Show-Day 'Monday 19 October: the plan first (Get-TurnstilePlan changes nothing; nor does -WhatIf)'
@@ -74,7 +74,28 @@ Write-Host ("  Directory file unchanged by looking: {0}" -f ($before -eq (Get-Fi
 
 Show-Day 'Monday 19 October: for real'
 $monday = Invoke-TurnstileSync -HrPath (& $hr '2026-10-19') -DirectoryPath $directoryPath -Today '2026-10-19'
-Write-Host ("  Done: {0} applied, {1} waiting for approval. Details are in the audit log." -f $monday.Applied, $monday.Plan.Summary.NeedsApproval)
+Write-Host ("  Done: {0} changes applied. Waiting for a decision:" -f $monday.Applied)
+Get-TurnstileApproval -DirectoryPath $directoryPath -Status Pending | ForEach-Object {
+    $what = if ($_.Kind -eq 'Confirm') { 'confirm access they already have' } else { 'new' }
+    Write-Host ("    {0}  {1,-17} {2,-18} {3}: {4}" -f $_.Id, $_.Username, $_.Group, $_.Title, $what) -ForegroundColor Magenta
+}
+
+Show-Day 'Monday 19 October, later: the decisions'
+$decide = { param($what, [scriptblock] $do)
+    try { $r = & $do; Write-Host "  $what" ; Write-Host ("    -> {0} {1} by {2}{3}" -f $r.Id, $r.Status.ToLower(), $r.DecidedBy, $(if ($r.ExpiresOn) { ", until $($r.ExpiresOn)" } else { '' })) -ForegroundColor Green }
+    catch { Write-Host "  $what"; Write-Host "    -> refused: $($_.Exception.Message)" -ForegroundColor Red } }
+$ids = @{}; Get-TurnstileApproval -DirectoryPath $directoryPath -Status Pending | ForEach-Object { $ids[$_.Username] = $_.Id }
+& $decide 'Andre tries to approve his own Server Admins request' {
+    Approve-TurnstileAccess -DirectoryPath $directoryPath -Id $ids['andre.cupid'] -ApprovedBy andre.cupid -Ticket CHG-1042 -Today '2026-10-19' }
+& $decide 'Akeem from the help desk tries to approve it for him' {
+    Approve-TurnstileAccess -DirectoryPath $directoryPath -Id $ids['andre.cupid'] -ApprovedBy akeem.ballantyne -Ticket CHG-1042 -Today '2026-10-19' }
+& $decide 'Dwight, Andre''s manager, approves it, with a change ticket' {
+    Approve-TurnstileAccess -DirectoryPath $directoryPath -Id $ids['andre.cupid'] -ApprovedBy dwight.robertson -Ticket CHG-1042 -Today '2026-10-19' }
+& $decide 'Garfield confirms Lystra''s Finance Approvers access' {
+    Approve-TurnstileAccess -DirectoryPath $directoryPath -Id $ids['lystra.baptiste'] -ApprovedBy garfield.providence -Ticket CHG-1043 -Today '2026-10-19' }
+& $decide 'Lystra, who owns the Payroll group, confirms Ronald''s access for 60 days' {
+    Approve-TurnstileAccess -DirectoryPath $directoryPath -Id $ids['ronald.cottle'] -ApprovedBy lystra.baptiste -Ticket CHG-1044 -Days 60 -Today '2026-10-19' }
+Write-Host '  Each decision is written to the audit log first. That entry is what makes it count.' -ForegroundColor DarkGray
 
 Show-Day 'Tuesday 20 October: a leaver, a contractor, and the fixed row'
 Invoke-TurnstileSync -HrPath (& $hr '2026-10-20') -DirectoryPath $directoryPath -Today '2026-10-20' | Show-TurnstilePlan
@@ -93,10 +114,29 @@ Invoke-TurnstileSync -HrPath (& $hr '2026-10-22') -DirectoryPath $directoryPath 
     Write-Host '  Nothing changed. Port Operations kept working while HR fixed the export.' -ForegroundColor DarkGray
 }
 
+Show-Day 'Thursday night: someone edits approvals.json to stretch Andre''s approval to 2030'
+$approvalsPath = Join-Path $out 'approvals.json'
+$saved = Get-Content $approvalsPath -Raw
+$edited = $saved | ConvertFrom-Json -AsHashtable
+($edited.requests | Where-Object username -eq 'andre.cupid').expiresOn = '2030-01-01'
+$edited | ConvertTo-Json -Depth 6 | Set-Content $approvalsPath -Encoding utf8NoBOM
+Get-TurnstilePlan -HrPath (& $hr '2026-10-23') -DirectoryPath $directoryPath -Today '2026-10-23' | ForEach-Object {
+    $_.Issues | Where-Object Severity -eq 'Error' | ForEach-Object { Write-Host "  ! $($_.Message)" -ForegroundColor Red }
+    ($_.Actions | Where-Object Username -eq 'andre.cupid').Detail | ForEach-Object { Write-Host "  andre.cupid: $_" -ForegroundColor Magenta }
+}
+Write-Host '  The audit log says 2027-01-17, so the edited approval doesn''t count. (Putting the file back.)' -ForegroundColor DarkGray
+Set-Content $approvalsPath $saved -NoNewline -Encoding utf8NoBOM
+
 Show-Day 'Friday 23 October: back to normal, and running twice changes nothing'
 $friday = Invoke-TurnstileSync -HrPath (& $hr '2026-10-23') -DirectoryPath $directoryPath -Today '2026-10-23'
 $again = Invoke-TurnstileSync -HrPath (& $hr '2026-10-23') -DirectoryPath $directoryPath -Today '2026-10-23'
-Write-Host "  First run: $($friday.Applied) changes. Second run: $($again.Applied) changes. Still waiting for approval: Andre Cupid, Server Admins."
+Write-Host "  First run: $($friday.Applied) changes. Second run: $($again.Applied) changes."
+
+Show-Day 'Friday 23 October: the access review'
+$review = Get-TurnstileAccessReview -DirectoryPath $directoryPath -HrPath (& $hr '2026-10-23') -Today '2026-10-23'
+$review | Show-TurnstileAccessReview
+$files = $review | Export-TurnstileAccessReview -Folder (Join-Path $out 'review')
+Write-Host "  For managers to sign off: demo-output\review\$(Split-Path -Leaf $files[1]) (one row per membership, with a Decision column)" -ForegroundColor DarkGray
 
 Show-Day 'Monday 26 October: Zoë starts'
 Invoke-TurnstileSync -HrPath (& $hr '2026-10-26') -DirectoryPath $directoryPath -Today '2026-10-26' | Show-TurnstilePlan
@@ -107,11 +147,14 @@ Write-Host '  Her manager''s note (password hidden here):' -ForegroundColor Dark
 Show-Day 'Friday 20 November: Desmond''s 30 days are up'
 Invoke-TurnstileSync -HrPath (& $hr '2026-11-20') -DirectoryPath $directoryPath -Today '2026-11-20' | Show-TurnstilePlan
 
+Show-Day 'Monday 18 January 2027: approvals run out, and so does a contract'
+Invoke-TurnstileSync -HrPath (& $hr '2027-01-18') -DirectoryPath $directoryPath -Today '2027-01-18' | Show-TurnstilePlan
+
 Show-Day 'The audit log'
 $check = Test-TurnstileAuditLog -Path $auditPath
 Write-Host "  $($check.Entries) entries, chain intact: $($check.Valid)"
 $lines = Get-Content $auditPath
-$lines | Select-String '"event":"(Disable|SafetyOverride|RunRefused)"' | Select-Object -First 3 | ForEach-Object {
+$lines | Select-String '"event":"(Disable|RunRefused|ApprovalGranted)"' | Select-Object -First 4 | ForEach-Object {
     $entry = ($_.Line.Substring(65) | ConvertFrom-Json)
     Write-Host ("    #{0} {1} {2}: {3}" -f $entry.seq, $entry.event, $entry.target, $entry.detail) -ForegroundColor DarkGray
 }
@@ -121,4 +164,4 @@ $bad = Test-TurnstileAuditLog -Path $tampered
 Write-Host "  Someone edits a copy to blame a different account: chain intact: $($bad.Valid). $($bad.Problem)" -ForegroundColor Yellow
 
 Write-Host ''
-Write-Host 'Everything above is in demo-output\: the directory, the audit log, and the new-starter notes.'
+Write-Host 'Everything above is in demo-output\: the directory, approvals, the audit log, the new-starter notes and the review.'

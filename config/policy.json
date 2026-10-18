@@ -14,33 +14,102 @@
     "Kingstown": {
       "ou": "OU=Kingstown,OU=Staff,DC=windwardfreight,DC=example",
       "office": "Bay Street, Kingstown",
-      "groups": ["Kingstown Office"]
+      "groups": [
+        "Kingstown Office"
+      ]
     },
     "Bequia": {
       "ou": "OU=Bequia,OU=Staff,DC=windwardfreight,DC=example",
       "office": "Port Elizabeth, Bequia",
-      "groups": ["Bequia Office"]
+      "groups": [
+        "Bequia Office"
+      ]
     }
   },
-  "everyone": ["All Staff"],
+  "everyone": [
+    "All Staff"
+  ],
   "employmentTypes": {
     "Employee": [],
-    "Contractor": ["Contractors"]
+    "Contractor": [
+      "Contractors"
+    ]
   },
   "departments": {
-    "Management": ["Management"],
-    "Finance": ["Finance", "Finance Share"],
-    "Port Operations": ["Port Ops", "Port Ops Rota"],
-    "Customer Service": ["Customer Service", "Bookings System"],
-    "IT": ["IT Team"],
-    "Human Resources": ["HR", "HR Confidential"]
+    "Management": [
+      "Management"
+    ],
+    "Finance": [
+      "Finance",
+      "Finance Share"
+    ],
+    "Port Operations": [
+      "Port Ops",
+      "Port Ops Rota"
+    ],
+    "Customer Service": [
+      "Customer Service",
+      "Bookings System"
+    ],
+    "IT": [
+      "IT Team"
+    ],
+    "Human Resources": [
+      "HR",
+      "HR Confidential"
+    ]
   },
   "roles": [
-    { "titleMatches": "Manager|Director|Supervisor", "groups": ["People Managers"] },
-    { "titleMatches": "^Finance Manager$", "groups": ["Finance Approvers"] },
-    { "titleMatches": "Payroll", "groups": ["Payroll"] },
-    { "titleMatches": "^IT Support", "groups": ["Helpdesk"] },
-    { "titleMatches": "^Systems Administrator$", "groups": ["Server Admins"] }
+    {
+      "titleMatches": "Manager|Director|Supervisor",
+      "groups": [
+        "People Managers"
+      ]
+    },
+    {
+      "titleMatches": "^Finance Manager$",
+      "groups": [
+        "Finance Approvers"
+      ]
+    },
+    {
+      "titleMatches": "Payroll",
+      "groups": [
+        "Payroll"
+      ]
+    },
+    {
+      "titleMatches": "^IT Support",
+      "groups": [
+        "Helpdesk"
+      ]
+    },
+    {
+      "titleMatches": "^Systems Administrator$",
+      "groups": [
+        "Server Admins"
+      ]
+    }
   ],
-  "privilegedGroups": ["Domain Admins", "Server Admins", "Finance Approvers", "Payroll"]
+  "privilegedGroups": [
+    "Domain Admins",
+    "Server Admins",
+    "Finance Approvers",
+    "Payroll"
+  ],
+  "approvals": {
+    "defaultDays": 90,
+    "maxDays": 365,
+    "ticketPattern": "^(CHG|INC|REQ)-[0-9]{3,8}$",
+    "groupOwners": {
+      "Domain Admins": "E1016",
+      "Server Admins": "E1016",
+      "Finance Approvers": "E1001",
+      "Payroll": "E1002"
+    }
+  },
+  "review": {
+    "soonDays": 14,
+    "pendingDays": 3
+  }
 }

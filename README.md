@@ -4,15 +4,15 @@ Joiners, movers and leavers, handled automatically. Turnstile reads the HR depar
 export and keeps everyone's user account in step with it: new starters get an account with the
 right access, people who change jobs get their new access and lose the old, and leavers are
 switched off the morning after their last day. It's careful about it. It shows its plan first,
-won't act on a broken export, never hands out admin rights by itself, and records every change
-in an audit log that shows if anyone edits it.
+won't act on a broken export, gives out admin rights only with an approval that expires, and
+records every change in an audit log that shows if anyone edits it.
 
 > Windward Freight & Shipping Ltd, its staff and its directory are invented, for the demo.
 > Kingstown and Bequia are real.
 
-**Status: Phase 1 of 4.** The engine and its tests, working on a practice directory. Coming
-next: an approval step for privileged access and access reviews (Phase 2), an HTML report
-(Phase 3), and an Active Directory connector plus CI (Phase 4).
+**Status: Phase 2 of 4.** The engine, approvals for admin rights, and access reviews, working
+on a practice directory. Coming next: an HTML report (Phase 3), and an Active Directory
+connector plus CI (Phase 4).
 
 ## Run it
 
@@ -33,6 +33,16 @@ Get-TurnstilePlan    -HrPath .\data\hr\2026-10-19.csv -DirectoryPath .\demo-outp
 Invoke-TurnstileSync -HrPath .\data\hr\2026-10-19.csv -DirectoryPath .\demo-output\directory.json -WhatIf
 Invoke-TurnstileSync -HrPath .\data\hr\2026-10-19.csv -DirectoryPath .\demo-output\directory.json | Show-TurnstilePlan
 Test-TurnstileAuditLog -Path .\demo-output\audit.log
+
+# Approvals
+Get-TurnstileApproval   -DirectoryPath .\demo-output\directory.json -Status Pending
+Approve-TurnstileAccess -DirectoryPath .\demo-output\directory.json -Id APR-0003 -ApprovedBy dwight.robertson -Ticket CHG-1042
+Deny-TurnstileAccess    -DirectoryPath .\demo-output\directory.json -Id APR-0004 -DeniedBy garfield.providence -Reason "..."
+Revoke-TurnstileAccess  -DirectoryPath .\demo-output\directory.json -Id APR-0003 -RevokedBy dwight.robertson -Reason "..."
+
+# Access review
+Get-TurnstileAccessReview -DirectoryPath .\demo-output\directory.json -HrPath .\data\hr\2026-10-23.csv | Show-TurnstileAccessReview
+Get-TurnstileAccessReview -DirectoryPath .\demo-output\directory.json | Export-TurnstileAccessReview -Folder .\review
 ```
 
 `-WhatIf` and `-Confirm` work as they do for any PowerShell command. `-Today 2026-10-19` runs
@@ -65,8 +75,7 @@ a second Kevin Browne is `kevin.browne2`.
 - **Job titles** add more: anyone whose title includes Manager, Director or Supervisor gets
   People Managers; IT Support titles get Helpdesk.
 - **Privileged groups** (Domain Admins, Server Admins, Finance Approvers, Payroll) are **never
-  added automatically**. Turnstile lists them as *needs approval* and leaves them out. Once
-  someone has one, it's kept while their job still calls for it, and removed when it doesn't.
+  added without an approval**. See [Approvals](#approvals-for-admin-rights).
 
 Access a person was given by hand is treated two ways:
 - A **policy group** their job doesn't give them is removed, because the policy decides who's in it.
@@ -99,10 +108,54 @@ HR exports go wrong: a truncated file, a bad batch update. Turnstile assumes the
   cryptographic generator) and must be changed at first sign-in. It's written only to the
   manager's note, never to the directory file or the audit log. A test checks both.
 
+## Approvals for admin rights
+
+When someone's job calls for a privileged group, Turnstile raises a request (APR-0003) instead
+of adding it:
+
+```
+  andre.cupid (Andre Cupid, E1022)
+      ? Add to Server Admins: privileged, so it needs approval first (request APR-0003 raised)
+```
+
+- **Who can decide:** the person's line manager, or the group's owner (set in the policy by
+  employee ID). Never the person themselves, never a service account, never a disabled account.
+- **What it needs:** a change ticket (CHG-1042), and a length: 90 days by default, at most 365.
+- **Approved:** added on the next run. **Denied:** not added, and not asked again unless their
+  job title changes. **Revoked:** removed on the next run.
+- **Expired:** removed the day after it ends, and a new request is raised automatically. Admin
+  rights are never permanent by accident.
+- **Moved or left:** the approval ends and the access goes with it. A request nobody needs
+  any more is cancelled.
+- **Admin rights from before Turnstile:** kept, but a "confirm" request is raised. Approve it
+  and nothing changes; deny it and the access is removed.
+
+**Why editing approvals.json doesn't work.** The requests live in `approvals.json`, but an
+approval only counts if the hash-chained audit log holds a matching ApprovalGranted entry:
+same request, person, group and end date. Mark your own request "Approved", or stretch an
+end date to 2030, and Turnstile ignores it and says so. If the audit log itself fails its
+check, Turnstile won't run at all until someone finds out why.
+
+## Access reviews
+
+`Get-TurnstileAccessReview` lists every group membership with where it came from (their job,
+an approval, granted by hand, a service account) and flags what needs a look:
+
+| | |
+|---|---|
+| **High** | privileged access with no current approval; an approval the audit log doesn't back up; a leaver still in groups; an audit log that fails its check |
+| **Medium** | access granted by hand; enabled staff missing from the HR export; requests waiting more than 3 days; service accounts in privileged groups; accounts switched off by hand but still in groups |
+| **Low** | approvals and contracts ending within 14 days; accounts with no employee ID (who owns `svc-backup`?) |
+
+`Export-TurnstileAccessReview` saves two CSV files: the findings, and one row per membership
+grouped by manager with a blank **Decision** column for them to sign off. Any cell starting
+with `=`, `+`, `-` or `@` gets a leading `'`, so a job title like `=HYPERLINK(...)` can't run as
+a formula when the file is opened in Excel (CSV injection). The review changes nothing.
+
 ## The audit log
 
 One line per event: runs starting and finishing, every change (with old and new values), every
-refusal and override. Each line carries a SHA-256 hash of its own contents *and* of the line
+refusal and override, and every approval request and decision. Each line carries a SHA-256 hash of its own contents *and* of the line
 before it, so the lines form a chain:
 
 ```
@@ -122,35 +175,49 @@ HR exports from `data\hr\`:
 | Day | What happens |
 |---|---|
 | Fri 16 Oct | Turnstile takes over the 19 existing staff |
-| Mon 19 Oct | the plan first; then Zoë (starts next Monday) is created switched off; a second Kevin Browne becomes `kevin.browne2`; Tricia moves from Port Operations to Finance; Keisha changes her name; Andre, a new systems administrator, is waiting for approval for Server Admins; a row with a department that doesn't exist is rejected |
-| Tue 20 Oct | Desmond's last day was yesterday: switched off and stripped of access; a contractor starts; the rejected row, now fixed, goes through |
+| Mon 19 Oct | the plan first; then Zoë (starts next Monday) is created switched off; a second Kevin Browne becomes `kevin.browne2`; Tricia moves from Port Operations to Finance; Keisha changes her name; a row with a department that doesn't exist is rejected. Three requests are raised: Andre, a new systems administrator, needs Server Admins, and Lystra's and Ronald's admin rights from before need confirming |
+| Mon 19 Oct, later | Andre tries to approve himself: refused. A help-desk colleague tries: refused. His manager approves, with a ticket. Lystra's and Ronald's access is confirmed, Ronald's for 60 days |
+| Tue 20 Oct | Andre gets Server Admins; Desmond's last day was yesterday: switched off and stripped of access; a contractor starts; the rejected row, now fixed, goes through |
 | Wed 21 Oct | the export arrives with 6 rows instead of 24: **stopped**, nothing changed |
 | Thu 22 Oct | an HR glitch gives all of Port Operations an end date: **stopped** |
-| Fri 23 Oct | a normal export; run it twice and the second run changes nothing |
+| Thu night | someone edits approvals.json to stretch Andre's approval to 2030: Turnstile ignores it and says why |
+| Fri 23 Oct | a normal export; run it twice and the second run changes nothing; then the access review, exported for managers |
 | Mon 26 Oct | Zoë's first day: her account is switched on |
 | Fri 20 Nov | Desmond's 30 days are up: his account is deleted |
+| Mon 18 Jan 2027 | three approvals have run out: the access is removed and new requests raised; the contractor's end date has passed, so her account is switched off |
 
 Then it checks the audit log, edits a copy to blame the wrong person, and shows the check
 catching it.
 
 ## Tests
 
-60 Pester tests:
+88 Pester tests:
 
 - **Every rule above**, one scenario at a time: joiners (including a manager and their new
   report joining the same day), movers, name changes, contractors, leavers, 30-day deletion,
   rehires, people who never started, hand-granted access, privileged groups, service accounts.
 - **Every safety stop**, the override and its audit entry, `-WhatIf`, a second run finding
   nothing to do, and one failed change staying contained.
+- **Approvals:** who may and may not decide, tickets and lengths, approve, deny, revoke,
+  expire, confirm, cancel on leaving; an approval typed into the file by hand, a stretched end
+  date and a tampered audit log are all caught.
+- **The access review:** each kind of finding, where each membership came from, that it changes
+  nothing, and that exported CSVs can't carry Excel formulas.
+- **Accounts switched off by hand stay off.** Turnstile only switches back on what it switched
+  off itself (a leaver, or a new starter). An account locked during a security incident isn't
+  quietly re-enabled the next morning. (A test for the access review found this one.)
 - **The audit log:** editing, deleting, reordering and adding lines are all caught.
 - **Three random weeks.** A random company gets random changes every day for three weeks:
   people join, move, change name, leave and are rehired. After every run, every rule is
   checked across the whole directory (exactly the right groups, the right OU, switched on only
   between start and end date, no admin rights, unique usernames, an intact audit log), and a
   second run must find nothing to do.
-- **The tests were checked too.** I broke six rules in the code on purpose (movers keeping
-  old access, leavers keeping groups, admin rights granted automatically, leavers switched off a
-  day late, no OU moves, username clashes ignored), and each break made tests fail.
+- **The tests were checked too.** I broke twelve rules in the code on purpose, and each break
+  made tests fail: movers keeping old access, leavers keeping groups, admin rights granted
+  automatically, leavers switched off a day late, no OU moves, username clashes ignored,
+  approvals not checked against the audit log, self-approval, approvals that never expire,
+  anyone allowed to approve, a tampered audit log ignored, and hand-disabled accounts switched
+  back on.
 
 ## How it's organised
 
@@ -159,6 +226,8 @@ Turnstile/
   Turnstile.psd1        module manifest
   Public/               the commands you run
     Sync.ps1            Get-TurnstilePlan, Invoke-TurnstileSync, the new-starter note
+    Approvals.ps1       Get-TurnstileApproval, Approve-, Deny- and Revoke-TurnstileAccess
+    Review.ps1          Get-, Show- and Export-TurnstileAccessReview
     HrFeed.ps1          Import-TurnstileHrFeed: reading and checking the export
     Show.ps1            Show-TurnstilePlan
   Private/
@@ -166,6 +235,7 @@ Turnstile/
     Policy.ps1          who gets which groups
     Directory.ps1       the practice directory; every change goes through one function,
                         so an Active Directory connector can slot in behind it
+    Approvals.ps1       request states, who may decide, checking approvals against the audit log
     Audit.ps1           the hash-chained audit log and Test-TurnstileAuditLog
     Common.ps1          usernames, passwords, dates, hashing
 config/policy.json      the access policy

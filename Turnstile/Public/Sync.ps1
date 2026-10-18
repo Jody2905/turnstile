@@ -12,12 +12,27 @@ function Get-TurnstilePlan {
         [Parameter(Mandatory)][string] $HrPath,
         [Parameter(Mandatory)][string] $DirectoryPath,
         [string] $PolicyPath = $script:DefaultPolicy,
+        [string] $ApprovalPath,
+        [string] $AuditPath,
         [datetime] $Today = (Get-Date).Date
     )
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
+    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath
+    $view = Get-TurnstileApprovalView -Store (Open-TurnstileApprovals -Path $paths.Approvals) -AuditPath $paths.Audit
     $feed = Import-TurnstileHrFeed -Path $HrPath -Policy $policy
-    New-TurnstilePlan -Policy $policy -Directory $directory -Feed $feed -Today $Today
+    New-TurnstilePlan -Policy $policy -Directory $directory -Feed $feed -Today $Today -Approvals $view
+}
+
+function Get-TurnstilePaths {
+    # The audit log, approvals and new-starter notes live next to the directory file unless told otherwise.
+    param($Directory, [string] $ApprovalPath, [string] $AuditPath, [string] $CredentialPath)
+    $folder = Split-Path -Parent $Directory.Path
+    [pscustomobject]@{
+        Audit       = $(if ($AuditPath) { $AuditPath } else { Join-Path $folder 'audit.log' })
+        Approvals   = $(if ($ApprovalPath) { $ApprovalPath } else { Join-Path $folder 'approvals.json' })
+        Credentials = $(if ($CredentialPath) { $CredentialPath } else { Join-Path $folder 'new-starter-notes' })
+    }
 }
 
 function Invoke-TurnstileSync {
@@ -47,6 +62,7 @@ function Invoke-TurnstileSync {
         [Parameter(Mandatory)][string] $DirectoryPath,
         [string] $PolicyPath = $script:DefaultPolicy,
         [string] $AuditPath,
+        [string] $ApprovalPath,
         [string] $CredentialPath,
         [datetime] $Today = (Get-Date).Date,
         [switch] $Force,
@@ -54,11 +70,13 @@ function Invoke-TurnstileSync {
     )
     $policy = Read-TurnstilePolicy -Path $PolicyPath
     $directory = Open-TurnstileDirectory -Path $DirectoryPath
-    $folder = Split-Path -Parent $directory.Path
-    if (-not $AuditPath) { $AuditPath = Join-Path $folder 'audit.log' }
-    if (-not $CredentialPath) { $CredentialPath = Join-Path $folder 'new-starter-notes' }
+    $paths = Get-TurnstilePaths -Directory $directory -ApprovalPath $ApprovalPath -AuditPath $AuditPath -CredentialPath $CredentialPath
+    $AuditPath = $paths.Audit
+    $CredentialPath = $paths.Credentials
+    $store = Open-TurnstileApprovals -Path $paths.Approvals
+    $view = Get-TurnstileApprovalView -Store $store -AuditPath $AuditPath
     $feed = Import-TurnstileHrFeed -Path $HrPath -Policy $policy
-    $plan = New-TurnstilePlan -Policy $policy -Directory $directory -Feed $feed -Today $Today
+    $plan = New-TurnstilePlan -Policy $policy -Directory $directory -Feed $feed -Today $Today -Approvals $view
 
     $dryRun = [bool] $WhatIfPreference
     $runId = 'run-{0}-{1}' -f (Get-Date -Format 'yyyyMMddHHmmss'), (Get-Random -Maximum 99999).ToString('00000')
@@ -110,9 +128,18 @@ function Invoke-TurnstileSync {
                 elseif ($action.Kind -eq 'Move') { $data = @{ from = $action.Data.from; to = $action.Data.to } }
             }
             & $audit $action.Kind $action.Username $detail $data
+            if ($action.Kind -eq 'RemoveGroup' -and $action.Data.ContainsKey('endStatus')) {
+                $request = $store.State.requests | Where-Object id -eq $action.Data.approvalId
+                $request.status = $action.Data.endStatus
+                $request.endedOn = Format-TurnstileDate $plan.Today
+                $store.Changed = $true
+                & $audit 'ApprovalEnded' $action.Username "$($request.id): $($action.Data.endStatus.ToLower()), access to $($request.group) removed" @{ id = $request.id; status = $request.status }
+            }
         }
+        if (-not $dryRun) { Update-TurnstileApprovalRequests -Store $store -Plan $plan -Audit $audit }
     } finally {
         if (-not $dryRun -and $result.Applied -gt 0) { Save-TurnstileDirectory -Directory $directory }
+        if (-not $dryRun -and $store.Changed) { Save-TurnstileApprovals -Store $store }
     }
     & $audit 'RunCompleted' '' "Applied $($result.Applied), failed $($result.Failed), skipped $($result.Skipped); $($plan.Summary.NeedsApproval) waiting for approval" @{
         applied = $result.Applied; failed = $result.Failed; skipped = $result.Skipped; needsApproval = $plan.Summary.NeedsApproval }
@@ -139,4 +166,33 @@ Give these details to $($Action.Data.displayName) in person, then delete this fi
 Created by Turnstile on $(Format-TurnstileDate $Today).
 "@ | Set-Content -LiteralPath $path -Encoding utf8NoBOM
     $path
+}
+
+function Update-TurnstileApprovalRequests {
+    # Raise a request for everything waiting on approval that hasn't got one, and cancel
+    # pending requests nobody needs any more (they left, or their job changed).
+    param($Store, $Plan, $Audit)
+    $needed = @{}
+    foreach ($a in $Plan.Actions | Where-Object Status -eq 'NeedsApproval') {
+        $key = "$($a.EmployeeId)|$($a.Data.group)"
+        $needed[$key] = $true
+        if ($a.Data.ContainsKey('approvalId')) {
+            # Asked for as new, but someone has since added it by hand: it's now a confirmation.
+            $existing = $Store.State.requests | Where-Object id -eq $a.Data.approvalId
+            if ($existing.kind -ne $a.Data.kind) { $existing.kind = $a.Data.kind; $Store.Changed = $true }
+            continue
+        }
+        $request = New-TurnstileApprovalRequest -Store $Store -Action $a -Today $Plan.Today -Title $a.Data.title -Kind $a.Data.kind
+        $a.Data.approvalId = $request.id
+        $a.Detail = "$($a.Detail) (request $($request.id) raised)"
+        $what = if ($request.kind -eq 'Confirm') { 'confirm existing access to' } else { 'add to' }
+        & $Audit 'ApprovalRequested' $a.Username "$($request.id): $what $($request.group), for their job as $($request.title)" @{ id = $request.id; employeeId = $request.employeeId; group = $request.group; kind = $request.kind }
+    }
+    foreach ($request in @($Store.State.requests | Where-Object status -eq 'Pending')) {
+        if ($needed.ContainsKey("$($request.employeeId)|$($request.group)")) { continue }
+        $request.status = 'Cancelled'
+        $request.endedOn = Format-TurnstileDate $Plan.Today
+        $Store.Changed = $true
+        & $Audit 'ApprovalCancelled' $request.username "$($request.id): no longer needed" @{ id = $request.id }
+    }
 }

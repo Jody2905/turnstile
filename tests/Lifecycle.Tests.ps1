@@ -28,7 +28,7 @@ Describe 'Joiners' {
         $null = Sync -Rows ($staff + $zoe) -Today '2026-10-25'
         (Get-User 'zoe.ollivierre').enabled | Should -BeFalse
         $run = Sync -Rows ($staff + $zoe) -Today '2026-10-26'
-        $run.Plan.Actions.Detail | Should -Be @('Starts today: enable the account')
+        (Get-ActionsFor $run 'zoe.ollivierre').Detail | Should -Be @('Starts today: enable the account')
         (Get-User 'zoe.ollivierre').enabled | Should -BeTrue
     }
 
@@ -77,16 +77,16 @@ Describe 'Privileged groups' {
     It 'are never added automatically: they wait for approval' {
         $andre = New-HrRow @{ EmployeeId = 'E1022'; FirstName = 'Andre'; LastName = 'Cupid'; Department = 'IT'; JobTitle = 'Systems Administrator'; StartDate = '2026-10-19' }
         $run = Sync -Rows ($staff + $andre) -Today '2026-10-19'
-        $pending = $run.Plan.Actions | Where-Object Status -eq 'NeedsApproval'
+        $pending = Get-ActionsFor $run 'andre.cupid' | Where-Object Status -eq 'NeedsApproval'
         $pending.Data.group | Should -Be @('Server Admins')
-        $run.Plan.Summary.NeedsApproval | Should -Be 1
         (Get-User 'andre.cupid').groups | Should -Not -Contain 'Server Admins'
         (Get-User 'andre.cupid').groups | Should -Contain 'IT Team'
     }
 
-    It 'are kept once approved, and taken away when the job changes' {
-        # Lystra's membership was approved before Turnstile (see Initialize-Staff).
-        (Sync -Rows $staff -Today '2026-10-19').Plan.Summary.NeedsApproval | Should -Be 0
+    It 'held from before Turnstile are kept while they wait to be confirmed, and taken away when the job changes' {
+        # Lystra's membership dates from before Turnstile (see Initialize-Staff): no approval on record.
+        $run = Sync -Rows $staff -Today '2026-10-19'
+        (Get-ActionsFor $run 'lystra.baptiste').Kind | Should -Be @('Confirm')
         (Get-User 'lystra.baptiste').groups | Should -Contain 'Finance Approvers'
         $null = Sync -Rows (Set-Row $staff 'E1002' @{ JobTitle = 'Accounts Assistant' }) -Today '2026-10-20'
         (Get-User 'lystra.baptiste').groups | Should -Not -Contain 'Finance Approvers'
@@ -151,7 +151,7 @@ Describe 'Leavers' {
         (Get-User 'desmond.hazell').enabled | Should -BeTrue
         (Get-User 'desmond.hazell').accountExpires | Should -Be '2026-10-19'
         $run = Sync -Rows $leaving -Today '2026-10-20'
-        $run.Plan.Actions[0].Kind | Should -Be 'Disable'   # access is cut first
+        (Get-ActionsFor $run 'desmond.hazell')[0].Kind | Should -Be 'Disable'   # access is cut first
         $u = Get-User 'desmond.hazell'
         $u.enabled | Should -BeFalse
         $u.groups | Should -BeNullOrEmpty
@@ -167,7 +167,7 @@ Describe 'Leavers' {
         $null = Sync -Rows $gone -Today '2026-11-18'
         Get-User 'desmond.hazell' | Should -Not -BeNullOrEmpty
         $run = Sync -Rows $gone -Today '2026-11-19'
-        $run.Plan.Actions.Kind | Should -Be @('Delete')
+        (Get-ReadyActions $run).Kind | Should -Be @('Delete')
         Get-User 'desmond.hazell' | Should -BeNullOrEmpty
     }
 
@@ -175,7 +175,7 @@ Describe 'Leavers' {
         $null = Sync -Rows (Set-Row $staff 'E1006' @{ EndDate = '2026-10-19' }) -Today '2026-10-20'
         $back = Set-Row $staff 'E1006' @{ StartDate = '2026-11-02'; Department = 'Customer Service'; JobTitle = 'Customer Service Agent'; ManagerId = 'E1012' }
         $run = Sync -Rows $back -Today '2026-11-02'
-        $run.Plan.Actions[0].Detail | Should -Be 'Rehired: enable the account'
+        (Get-ActionsFor $run 'desmond.hazell')[0].Detail | Should -Be 'Rehired: enable the account'
         $u = Get-User 'desmond.hazell'
         $u.enabled | Should -BeTrue
         $u.disabledOn | Should -BeNullOrEmpty
@@ -197,6 +197,21 @@ Describe 'Leavers' {
 
 Describe 'People and rows Turnstile leaves alone' {
     BeforeEach { $staff = Initialize-Staff }
+
+    It 'never switches back on an account someone disabled by hand' {
+        Set-DirectoryUser 'jerome.delves' { param($u) $u.enabled = $false }
+        $run = Sync -Rows $staff -Today '2026-10-19'
+        (Get-User 'jerome.delves').enabled | Should -BeFalse
+        Get-ActionsFor $run 'jerome.delves' | Should -BeNullOrEmpty
+        $run.Plan.Issues.Message | Should -Contain "jerome.delves is disabled, but HR says they're working. Turnstile didn't disable it (perhaps a security lock-out), so it was left disabled: check with IT security."
+    }
+
+    It 'switches a leaver back on if HR takes the end date away' {
+        $null = Sync -Rows (Set-Row $staff 'E1006' @{ EndDate = '2026-10-19' }) -Today '2026-10-20'
+        $run = Sync -Rows $staff -Today '2026-10-21'
+        (Get-ActionsFor $run 'desmond.hazell')[0].Detail | Should -Be 'HR no longer has an end date: enable the account again'
+        (Get-User 'desmond.hazell').enabled | Should -BeTrue
+    }
 
     It 'never touches accounts without an employee ID (service and admin accounts)' {
         $run = Sync -Rows $staff -Today '2026-10-19'
@@ -277,7 +292,7 @@ Describe 'Running it' {
         (Sync -Rows $changed -Today '2026-10-19').Applied | Should -BeGreaterThan 0
         $again = Sync -Rows $changed -Today '2026-10-19'
         $again.Applied | Should -Be 0
-        $again.Plan.Actions | Should -BeNullOrEmpty
+        Get-ReadyActions $again | Should -BeNullOrEmpty
     }
 
     It 'when one change fails, that person''s other changes are skipped and everyone else carries on' {

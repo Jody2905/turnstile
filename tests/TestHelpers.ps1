@@ -47,6 +47,7 @@ function New-Directory {
     }
     Set-Content -Path $path -Value ($state | ConvertTo-Json -Depth 8) -Encoding utf8NoBOM
     Remove-Item (Join-Path $TestDrive 'audit.log') -ErrorAction Ignore
+    Remove-Item (Join-Path $TestDrive 'approvals.json') -ErrorAction Ignore
     Remove-Item (Join-Path $TestDrive 'new-starter-notes') -Recurse -ErrorAction Ignore
     $path
 }
@@ -106,8 +107,20 @@ function Initialize-Staff {
     # Approved before Turnstile: Lystra's privileged Finance Approvers membership.
     Set-DirectoryUser 'lystra.baptiste' { param($u) $u.groups = @(@($u.groups) + 'Finance Approvers' | Sort-Object) }
     Remove-Item (Join-Path $TestDrive 'audit.log') -ErrorAction Ignore
+    Remove-Item (Join-Path $TestDrive 'approvals.json') -ErrorAction Ignore
     Remove-Item (Join-Path $TestDrive 'new-starter-notes') -Recurse -ErrorAction Ignore
     $staff
+}
+
+function Get-ActionsFor {
+    # One person's planned actions.
+    param($Run, [string] $Username)
+    @($Run.Plan.Actions | Where-Object Username -eq $Username)
+}
+
+function Get-ReadyActions {
+    param($Run)
+    @($Run.Plan.Actions | Where-Object Status -eq 'Ready')
 }
 
 function Set-DirectoryUser {

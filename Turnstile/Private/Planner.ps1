@@ -26,7 +26,8 @@ function New-TurnstilePlan {
         [Parameter(Mandatory)] $Policy,
         [Parameter(Mandatory)] $Directory,
         [Parameter(Mandatory)] $Feed,
-        [Parameter(Mandatory)][datetime] $Today
+        [Parameter(Mandatory)][datetime] $Today,
+        $Approvals   # from Get-TurnstileApprovalView; none means no approvals on record
     )
     $Today = $Today.Date
     $actions = [Collections.Generic.List[object]]::new()
@@ -112,7 +113,9 @@ function New-TurnstilePlan {
                 & $add 'Disable' $user.username $r "Left on $(Format-TurnstileDate $r.EndDate): disable the account" @{
                     description = "Left $(Format-TurnstileDate $r.EndDate). Disabled by Turnstile $(Format-TurnstileDate $Today)." }
             }
-            foreach ($g in @($user.groups)) { & $add 'RemoveGroup' $user.username $r "Remove from $g (leaver)" @{ group = $g } }
+            foreach ($g in @($user.groups)) {
+                & $add 'RemoveGroup' $user.username $r "Remove from $g (leaver)" (New-TurnstileRemoval -Group $g -Approvals $Approvals -EmployeeId $r.EmployeeId -Today $Today -Title $r.JobTitle)
+            }
             if ($user.ou -ne $Policy.disabledOu) {
                 & $add 'Move' $user.username $r "Move to the Disabled OU" @{ from = $user.ou; to = $Policy.disabledOu }
             }
@@ -134,14 +137,25 @@ function New-TurnstilePlan {
             $detail = if ($phase -eq 'active') { "New starter: $($r.JobTitle), $($r.Department), $($r.Location)" }
                 else { "New starter on $starts`: $($r.JobTitle), $($r.Department), $($r.Location). Created now, disabled until then" }
             & $add 'Create' $username $r $detail $create
-            foreach ($g in $entitled) { Add-TurnstileGrant -Policy $Policy -Group $g -Username $username -Record $r -Add $add }
+            foreach ($g in $entitled) { Add-TurnstileGrant -Policy $Policy -Group $g -Username $username -Record $r -Add $add -Note $note -Approvals $Approvals -Today $Today -Held $false }
             continue
         }
 
         if (-not $user.enabled) {
+            # Only switch on what Turnstile switched off (a leaver) or created switched off (a
+            # new starter). An account someone disabled by hand, say to lock it during a
+            # security incident, stays disabled until a person decides otherwise.
+            $created = ConvertTo-TurnstileDate $user['created']
             if ($phase -eq 'active') {
-                $why = if ($user.disabledOn) { 'Rehired: enable the account' } else { "Starts today: enable the account" }
-                & $add 'Enable' $user.username $r $why @{}
+                if ($user.disabledOn) {
+                    $why = if ($r.StartDate -gt (ConvertTo-TurnstileDate $user.disabledOn)) { 'Rehired: enable the account' } else { 'HR no longer has an end date: enable the account again' }
+                    & $add 'Enable' $user.username $r $why @{}
+                } elseif ($created -and $created -lt $r.StartDate) {
+                    & $add 'Enable' $user.username $r 'Starts today: enable the account' @{}
+                } else {
+                    & $note 'Warning' $r.EmployeeId "$($user.username) is disabled, but HR says they're working. Turnstile didn't disable it (perhaps a security lock-out), so it was left disabled: check with IT security."
+                    continue
+                }
             }
         } elseif ($phase -eq 'prestart') {
             & $note 'Warning' $r.EmployeeId "$($user.username) is enabled, but HR now says they start on $(Format-TurnstileDate $r.StartDate). Left enabled; check with HR."
@@ -165,12 +179,15 @@ function New-TurnstilePlan {
             & $add 'Update' $user.username $r "Update $what" $changes
         }
         foreach ($g in $entitled) {
-            if ($user.groups -notcontains $g) { Add-TurnstileGrant -Policy $Policy -Group $g -Username $user.username -Record $r -Add $add }
+            $held = $user.groups -contains $g
+            if (-not $held -or (Test-TurnstilePrivileged -Policy $Policy -Group $g)) {
+                Add-TurnstileGrant -Policy $Policy -Group $g -Username $user.username -Record $r -Add $add -Note $note -Approvals $Approvals -Today $Today -Held $held
+            }
         }
         foreach ($g in @($user.groups)) {
             if ($entitled -contains $g) { continue }
-            if ($managedGroups -contains $g) {
-                & $add 'RemoveGroup' $user.username $r "Remove from $g (no longer part of their job)" @{ group = $g }
+            if ($managedGroups -contains $g -or (Test-TurnstilePrivileged -Policy $Policy -Group $g)) {
+                & $add 'RemoveGroup' $user.username $r "Remove from $g (no longer part of their job)" (New-TurnstileRemoval -Group $g -Approvals $Approvals -EmployeeId $r.EmployeeId -Today $Today -Title $r.JobTitle)
             } else {
                 & $note 'Warning' $r.EmployeeId "$($user.username) is in $g, which isn't part of their job. It was added by hand, so it was left alone: please review it."
             }
@@ -201,6 +218,9 @@ function New-TurnstilePlan {
     } elseif ($enabledManaged -gt 0 -and ($missingEnabled * 100 / $enabledManaged) -gt $Policy.safety.maxMissingPercent) {
         $blocked = "The HR export looks incomplete: $missingEnabled of $enabledManaged current staff aren't in it (the limit is $($Policy.safety.maxMissingPercent)%)."
     }
+    if (-not $blocked -and $Approvals -and $Approvals.AuditProblem) {
+        $blocked = "The audit log fails its check ($($Approvals.AuditProblem)) Find out why before running again."
+    }
     $disables = @($actions | Where-Object Kind -eq 'Disable').Count
     $limit = [Math]::Max([int] $Policy.safety.minDisableLimit, [int] [Math]::Ceiling($enabledManaged * $Policy.safety.maxDisablePercent / 100))
     if (-not $blocked -and $disables -gt $limit) {
@@ -228,13 +248,57 @@ function New-TurnstilePlan {
 }
 
 function Add-TurnstileGrant {
-    # Ordinary groups are added straight away; privileged ones wait for approval.
-    param($Policy, $Group, $Username, $Record, $Add)
-    if (Test-TurnstilePrivileged -Policy $Policy -Group $Group) {
-        & $Add 'AddGroup' $Username $Record "Add to ${Group}: privileged, so it needs approval first" @{ group = $Group } 'NeedsApproval'
-    } else {
+    <#
+        An ordinary group is simply added. A privileged group depends on its approval:
+          not held yet:  approved and in date -> add it; otherwise wait for approval
+          already held:  approved and in date -> nothing to do
+                         expired               -> remove it, and ask again
+                         denied or revoked     -> remove it
+                         nothing on record     -> keep it for now, but ask for it to be confirmed
+    #>
+    param($Policy, $Group, $Username, $Record, $Add, $Note, $Approvals, [datetime] $Today, [bool] $Held)
+    if (-not (Test-TurnstilePrivileged -Policy $Policy -Group $Group)) {
         & $Add 'AddGroup' $Username $Record "Add to $Group" @{ group = $Group }
+        return
     }
+    $st = Get-TurnstileApprovalState -View $Approvals -EmployeeId $Record.EmployeeId -Group $Group -Today $Today -Title $Record.JobTitle
+    $req = $st.Request
+    $waiting = { param($kind, $detail)
+        $data = @{ group = $Group; kind = $kind; title = $Record.JobTitle }
+        if ($st.State -eq 'Pending') { $data.approvalId = $req.id; $detail = "$detail (waiting on $($req.id) since $($req.requestedOn))" }
+        & $Add $(if ($kind -eq 'Confirm') { 'Confirm' } else { 'AddGroup' }) $Username $Record $detail $data 'NeedsApproval' }
+    if ($st.State -eq 'Unbacked') {
+        & $Note 'Error' $Record.EmployeeId "$($req.id) is marked approved in the approvals file, but the audit log has no matching approval, so it's being ignored. Has the file been edited?"
+    }
+
+    if (-not $Held) {
+        switch ($st.State) {
+            'Valid' { & $Add 'AddGroup' $Username $Record "Add to $Group (approved: $($req.id) by $($req.decidedBy), ticket $($req.ticket), until $($req.expiresOn))" @{ group = $Group; approvalId = $req.id } }
+            'Rejected' { & $Note 'Info' $Record.EmployeeId "$Username isn't being added to ${Group}: $($req.id) was $($req.status.ToLower()) by $($req.decidedBy) on $($req.decidedOn)." }
+            default { & $waiting 'Add' "Add to ${Group}: privileged, so it needs approval first" }
+        }
+        return
+    }
+    switch ($st.State) {
+        'Valid' { }
+        'Expired' {
+            & $Add 'RemoveGroup' $Username $Record "Remove from ${Group}: approval $($req.id) expired on $($req.expiresOn)" @{ group = $Group; approvalId = $req.id; endStatus = 'Expired' }
+            & $waiting 'Add' "Add to ${Group} again: needs a new approval"
+        }
+        'Rejected' {
+            & $Add 'RemoveGroup' $Username $Record "Remove from ${Group}: $($req.id) was $($req.status.ToLower()) by $($req.decidedBy)" @{ group = $Group; approvalId = $req.id }
+        }
+        default { & $waiting 'Confirm' "Already in $Group with no approval on record: needs confirming (kept meanwhile)" }
+    }
+}
+
+function New-TurnstileRemoval {
+    # Data for removing a group; if a current approval covered it, that approval ends too.
+    param([string] $Group, $Approvals, [string] $EmployeeId, [datetime] $Today, [string] $Title)
+    $data = @{ group = $Group }
+    $st = Get-TurnstileApprovalState -View $Approvals -EmployeeId $EmployeeId -Group $Group -Today $Today -Title $Title
+    if ($st.State -in 'Valid', 'Expired') { $data.approvalId = $st.Request.id; $data.endStatus = 'Ended' }
+    $data
 }
 
 function Add-TurnstileRetentionAction {

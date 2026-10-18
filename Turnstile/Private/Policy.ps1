@@ -7,12 +7,15 @@ function Read-TurnstilePolicy {
     catch { throw "The policy file isn't valid JSON: $($_.Exception.Message)" }
 
     $required = 'organisation', 'domain', 'usernameMaxLength', 'prestartDays', 'leaverRetentionDays', 'safety',
-        'disabledOu', 'locations', 'everyone', 'employmentTypes', 'departments', 'roles', 'privilegedGroups'
+        'disabledOu', 'locations', 'everyone', 'employmentTypes', 'departments', 'roles', 'privilegedGroups', 'approvals', 'review'
     $missing = $required | Where-Object { -not $policy.Contains($_) }
     if ($missing) { throw "The policy is missing: $($missing -join ', ')" }
     foreach ($role in $policy.roles) {
         if (-not $role.titleMatches -or -not $role.groups) { throw 'Every role needs titleMatches and groups.' }
         try { [void] [regex]::new($role.titleMatches) } catch { throw "Role pattern '$($role.titleMatches)' isn't a valid regular expression." }
+    }
+    foreach ($g in $policy.privilegedGroups) {
+        if (-not $policy.approvals.groupOwners.Contains($g)) { throw "Privileged group '$g' needs an owner in approvals.groupOwners." }
     }
     foreach ($name in $policy.locations.Keys) {
         if (-not $policy.locations[$name].ou) { throw "Location '$name' needs an ou." }

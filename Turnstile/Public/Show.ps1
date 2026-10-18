@@ -8,8 +8,8 @@ function Show-TurnstilePlan {
     param([Parameter(Mandatory, ValueFromPipeline)] $InputObject)
     process {
         $plan = if ($InputObject.PSObject.Properties['Plan']) { $InputObject.Plan } else { $InputObject }
-        $symbols = @{ Create = '+'; Enable = '+'; Update = '~'; Move = '>'; AddGroup = '+'; RemoveGroup = '-'; Disable = 'x'; Delete = 'x' }
-        $colours = @{ Create = 'Green'; Enable = 'Green'; Update = 'Cyan'; Move = 'Cyan'; AddGroup = 'Green'; RemoveGroup = 'Yellow'; Disable = 'Red'; Delete = 'Red' }
+        $symbols = @{ Confirm = '?'; Create = '+'; Enable = '+'; Update = '~'; Move = '>'; AddGroup = '+'; RemoveGroup = '-'; Disable = 'x'; Delete = 'x' }
+        $colours = @{ Confirm = 'Magenta'; Create = 'Green'; Enable = 'Green'; Update = 'Cyan'; Move = 'Cyan'; AddGroup = 'Green'; RemoveGroup = 'Yellow'; Disable = 'Red'; Delete = 'Red' }
 
         Write-Host ("HR export: {0} ({1} rows)   Day: {2}" -f (Split-Path -Leaf $plan.HrPath), $plan.HrRows, (Format-TurnstileDate $plan.Today -Long))
         if ($plan.Blocked) {
