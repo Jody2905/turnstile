@@ -1,0 +1,6 @@
+{
+  "kind": "ActiveDirectory",
+  "domain": "windwardfreight.example",
+  "searchBase": "DC=windwardfreight,DC=example",
+  "server": "dc01.windwardfreight.example"
+}

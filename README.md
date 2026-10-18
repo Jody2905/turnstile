@@ -1,5 +1,7 @@
 # Turnstile
 
+[![CI](https://github.com/Jody2905/turnstile/actions/workflows/ci.yml/badge.svg)](https://github.com/Jody2905/turnstile/actions/workflows/ci.yml)
+
 Joiners, movers and leavers, handled automatically. Turnstile reads the HR department's daily
 export and keeps everyone's user account in step with it: new starters get an account with the
 right access, people who change jobs get their new access and lose the old, and leavers are
@@ -10,9 +12,8 @@ records every change in an audit log that shows if anyone edits it.
 > Windward Freight & Shipping Ltd, its staff and its directory are invented, for the demo.
 > Kingstown and Bequia are real.
 
-**Status: Phase 3 of 4.** The engine, approvals for admin rights, access reviews and an HTML
-report, working on a practice directory. Coming next: an Active Directory connector plus CI
-(Phase 4).
+It runs on a practice directory out of the box, and on a real Active Directory domain through
+a small connection file. Every push is linted and tested on Windows, Linux and macOS.
 
 ![The Turnstile report: status tiles, the next run's plan, approvals waiting](docs/report.jpg)
 
@@ -180,6 +181,73 @@ HR export and the audit log is HTML-encoded, so a job title of `<script>alert(1)
 appears as text. A test plants that title (and an `<img onerror>`) and checks neither survives;
 turning the encoding off makes it fail.
 
+## On a real Active Directory domain
+
+Any command's `-DirectoryPath` can point at a connection file instead of a practice directory
+([example](config/active-directory.example.json)):
+
+```json
+{ "kind": "ActiveDirectory", "domain": "windwardfreight.example",
+  "searchBase": "DC=windwardfreight,DC=example", "server": "dc01.windwardfreight.example" }
+```
+
+Turnstile reads one snapshot of the users and groups under `searchBase`, plans exactly as
+it does for the practice directory, and turns each change into the matching cmdlet
+(`New-ADUser`, `Set-ADUser`, `Disable-ADAccount`, `Move-ADObject`, `Add-ADGroupMember`...).
+The audit log, approvals and new-starter notes live next to the connection file.
+
+| Turnstile | Active Directory |
+|---|---|
+| username | `sAMAccountName`, and also the object's name, so two Kevin Brownes in one OU never clash |
+| employee ID | `employeeID`; accounts without one are never touched |
+| end date | `accountExpires`, set to the start of the day *after* the last working day, the way AD counts it |
+| "Turnstile switched this off" | `extensionAttribute15 = turnstile:disabledOn=2026-10-20`, so an account a person disabled stays disabled |
+| temporary password | a SecureString, with "must change at next sign-in" |
+
+**Setting it up safely:**
+
+1. Install the AD module (RSAT): `Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0`.
+   Without it, Turnstile says exactly that.
+2. Run it as its own service account, **not a Domain Admin**. Delegate only what it needs: on
+   the Staff and Disabled OUs, create, delete and move user objects, reset passwords and write
+   user properties; on each group in the policy, write members. Domain Admins is protected by
+   AdminSDHolder and can't be delegated this way, so it's best left out of the policy's roles
+   and managed by hand.
+3. Look before you leap: `Get-TurnstilePlan ... | Show-TurnstilePlan`, then `-WhatIf`. A test
+   proves `-WhatIf` calls nothing that changes AD.
+4. Run it every morning:
+
+   ```powershell
+   $action = New-ScheduledTaskAction -Execute 'pwsh.exe' -Argument '-NoProfile -Command "Import-Module C:\Turnstile\Turnstile\Turnstile.psd1; Invoke-TurnstileSync -HrPath \\hr01\exports\staff.csv -DirectoryPath C:\Turnstile\ad.json; Export-TurnstileReport -DirectoryPath C:\Turnstile\ad.json -Path C:\Turnstile\report.html"'
+   Register-ScheduledTask -TaskName Turnstile -Action $action -Trigger (New-ScheduledTaskTrigger -Daily -At 6am) -User 'WINDWARD\svc-turnstile' -Password (Read-Host 'Password')
+   ```
+
+**How it's tested without a domain.** `tests/fakes/ActiveDirectory` is a fake AD module with
+the same cmdlets and parameters, holding a small domain in memory. It refuses what a real
+domain controller refuses: a duplicate name in an OU, a missing OU, adding someone to a group
+twice, a weak or plain-text password, moving an account by username instead of distinguished
+name. The main test runs weeks of joiners, movers, leavers, an approval, a deletion and a
+rehire through **both** the practice directory and "AD", and requires them to be identical
+after every day. Six deliberate mistakes in the connector (the CN from the display name,
+the expiry a day early, no leaver stamp, moving by username, no manager, the stamp left on
+after re-enabling) each made it fail. A fake can't catch everything a real domain would, so
+the first runs on a real domain should be in a lab, starting with `-WhatIf`.
+
+## CI
+
+Every push runs on GitHub Actions ([workflow](.github/workflows/ci.yml)):
+
+- **Lint:** PSScriptAnalyzer over the module and scripts, every rule on, zero findings
+  allowed. Where a rule is set aside in the code, the reason is written next to it.
+- **Tests on Windows, Linux and macOS:** all Pester tests, with the results kept as an artifact.
+- **Demo:** runs the demo week on Windows, checks its audit log, and keeps the HTML report and
+  the access review CSVs as artifacts, so every run has a report you can download and open.
+
+Turning the linter on found real problems: a variable named `$event` (reserved by PowerShell),
+the temporary password passed around as plain text instead of a SecureString, and files with
+accented characters missing the byte-order mark that Windows PowerShell 5.1 needs to read
+them correctly.
+
 ## The audit log
 
 One line per event: runs starting and finishing, every change (with old and new values), every
@@ -220,7 +288,7 @@ Friday, `report-2026-10-23.html`).
 
 ## Tests
 
-94 Pester tests:
+102 Pester tests:
 
 - **Every rule above**, one scenario at a time: joiners (including a manager and their new
   report joining the same day), movers, name changes, contractors, leavers, 30-day deletion,
@@ -232,6 +300,9 @@ Friday, `report-2026-10-23.html`).
   date and a tampered audit log are all caught.
 - **The access review:** each kind of finding, where each membership came from, that it changes
   nothing, and that exported CSVs can't carry Excel formulas.
+- **Active Directory:** the practice directory and a strict fake domain stay identical through
+  weeks of changes; passwords, expiry dates, leaver stamps, moves, `-WhatIf`, and a missing
+  AD module.
 - **The report:** every section, a stopped run and a broken audit log shown plainly, HTML and
   script injection, the security policy, no outside requests, and that it changes nothing.
 - **Accounts switched off by hand stay off.** Turnstile only switches back on what it switched
@@ -267,15 +338,19 @@ Turnstile/
     Policy.ps1          who gets which groups
     Directory.ps1       the practice directory; every change goes through one function,
                         so an Active Directory connector can slot in behind it
+    ActiveDirectory.ps1 the AD connector: reading a snapshot, turning actions into AD cmdlets
     Approvals.ps1       request states, who may decide, checking approvals against the audit log
     Audit.ps1           the hash-chained audit log and Test-TurnstileAuditLog
     Common.ps1          usernames, passwords, dates, hashing
 config/policy.json      the access policy
+config/active-directory.example.json   a connection file for a real domain
 data/hr/                the demo week's HR exports
-tests/                  Pester tests
-demo.ps1, run-tests.ps1
+tests/                  Pester tests, and fakes/ActiveDirectory (the fake domain)
+.github/workflows/      CI: lint, tests on three systems, the demo and its report
+demo.ps1, run-tests.ps1, PSScriptAnalyzerSettings.psd1
 ```
 
 ## Built with
 
-PowerShell 7, Pester 5. No other dependencies.
+PowerShell 7, Pester 5, PSScriptAnalyzer, GitHub Actions. The Active Directory connector uses
+the ActiveDirectory module (RSAT). No other dependencies.

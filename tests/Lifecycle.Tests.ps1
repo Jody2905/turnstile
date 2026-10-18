@@ -1,4 +1,4 @@
-BeforeAll { . (Join-Path $PSScriptRoot 'TestHelpers.ps1') }
+﻿BeforeAll { . (Join-Path $PSScriptRoot 'TestHelpers.ps1') }
 
 Describe 'Joiners' {
     BeforeEach { $staff = Initialize-Staff }

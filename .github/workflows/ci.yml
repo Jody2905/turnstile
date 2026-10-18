@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (PSScriptAnalyzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+      - name: Lint the module and scripts
+        shell: pwsh
+        run: |
+          $findings = foreach ($path in './Turnstile', './demo.ps1', './run-tests.ps1') {
+              Invoke-ScriptAnalyzer -Path $path -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+          }
+          $findings | Format-Table Severity, ScriptName, Line, RuleName, Message -AutoSize -Wrap | Out-String -Width 220
+          if ($findings) { throw "$(@($findings).Count) lint finding(s)" }
+          'No lint findings.'
+
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
+          Get-Module Pester -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1 Name, Version
+      - name: Run the tests
+        shell: pwsh
+        env:
+          CI: 'true'
+        run: ./run-tests.ps1
+      - name: Keep the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results.xml
+
+  demo:
+    name: Demo week and report
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the demo
+        shell: pwsh
+        run: ./demo.ps1
+      - name: Check the audit log of the demo
+        shell: pwsh
+        run: |
+          Import-Module ./Turnstile/Turnstile.psd1
+          $check = Test-TurnstileAuditLog -Path ./demo-output/audit.log
+          "$($check.Entries) entries, valid: $($check.Valid)"
+          if (-not $check.Valid) { throw $check.Problem }
+      - name: Keep the report
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnstile-report
+          path: |
+            demo-output/report.html
+            demo-output/report-2026-10-23.html
+            demo-output/review/

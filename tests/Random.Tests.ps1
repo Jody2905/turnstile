@@ -1,4 +1,4 @@
-# Random weeks of HR changes, checked against rules that must always hold.
+﻿# Random weeks of HR changes, checked against rules that must always hold.
 #
 # Each seed builds a company, then for three weeks makes random changes every day: people
 # join (some days ahead), move department or island, change name, leave, get rehired, and

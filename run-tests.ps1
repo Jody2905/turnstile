@@ -1,6 +1,7 @@
 #Requires -Version 7.4
 # Runs the Pester tests. Needs Pester 5.5 or newer:
 #   Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Talks to the person running the tests.')]
 param([string] $Path = (Join-Path $PSScriptRoot 'tests'), [string] $Output = 'Normal')
 if (-not (Get-Module Pester -ListAvailable | Where-Object Version -ge ([version] '5.5'))) {
     Write-Host 'These tests need Pester 5.5 or newer. Windows comes with Pester 3.4, which is too old.' -ForegroundColor Yellow

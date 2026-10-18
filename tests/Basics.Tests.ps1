@@ -1,4 +1,4 @@
-BeforeAll { . (Join-Path $PSScriptRoot 'TestHelpers.ps1') }
+﻿BeforeAll { . (Join-Path $PSScriptRoot 'TestHelpers.ps1') }
 
 Describe 'Usernames' {
     It 'makes first.last, letters only, without accents' -ForEach @(
@@ -144,7 +144,7 @@ Describe 'The audit log' {
         Remove-Item $log -ErrorAction Ignore
         InModuleScope Turnstile -Parameters @{ L = $log } {
             param($L)
-            foreach ($n in 1..5) { Add-TurnstileAuditEntry -Path $L -RunId 'run-test' -Event 'Disable' -Target "user$n" -Detail "Entry $n" }
+            foreach ($n in 1..5) { Add-TurnstileAuditEntry -Path $L -RunId 'run-test' -EventName 'Disable' -Target "user$n" -Detail "Entry $n" }
         }
         $lines = Get-Content $log
     }
