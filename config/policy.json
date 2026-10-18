@@ -1,0 +1,46 @@
+{
+  "organisation": "Windward Freight & Shipping Ltd",
+  "domain": "windwardfreight.example",
+  "usernameMaxLength": 20,
+  "prestartDays": 7,
+  "leaverRetentionDays": 30,
+  "safety": {
+    "maxDisablePercent": 10,
+    "minDisableLimit": 3,
+    "maxMissingPercent": 20
+  },
+  "disabledOu": "OU=Disabled,DC=windwardfreight,DC=example",
+  "locations": {
+    "Kingstown": {
+      "ou": "OU=Kingstown,OU=Staff,DC=windwardfreight,DC=example",
+      "office": "Bay Street, Kingstown",
+      "groups": ["Kingstown Office"]
+    },
+    "Bequia": {
+      "ou": "OU=Bequia,OU=Staff,DC=windwardfreight,DC=example",
+      "office": "Port Elizabeth, Bequia",
+      "groups": ["Bequia Office"]
+    }
+  },
+  "everyone": ["All Staff"],
+  "employmentTypes": {
+    "Employee": [],
+    "Contractor": ["Contractors"]
+  },
+  "departments": {
+    "Management": ["Management"],
+    "Finance": ["Finance", "Finance Share"],
+    "Port Operations": ["Port Ops", "Port Ops Rota"],
+    "Customer Service": ["Customer Service", "Bookings System"],
+    "IT": ["IT Team"],
+    "Human Resources": ["HR", "HR Confidential"]
+  },
+  "roles": [
+    { "titleMatches": "Manager|Director|Supervisor", "groups": ["People Managers"] },
+    { "titleMatches": "^Finance Manager$", "groups": ["Finance Approvers"] },
+    { "titleMatches": "Payroll", "groups": ["Payroll"] },
+    { "titleMatches": "^IT Support", "groups": ["Helpdesk"] },
+    { "titleMatches": "^Systems Administrator$", "groups": ["Server Admins"] }
+  ],
+  "privilegedGroups": ["Domain Admins", "Server Admins", "Finance Approvers", "Payroll"]
+}

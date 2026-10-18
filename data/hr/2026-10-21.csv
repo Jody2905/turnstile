@@ -1,0 +1,7 @@
+EmployeeId,FirstName,LastName,PreferredName,Department,JobTitle,Location,ManagerId,EmploymentType,StartDate,EndDate
+E1001,Garfield,Providence,,Management,Managing Director,Kingstown,,Employee,2009-03-02,
+E1002,Lystra,Baptiste,,Finance,Finance Manager,Kingstown,E1001,Employee,2014-06-16,
+E1003,Keisha,Matthews,,Finance,Accounts Assistant,Kingstown,E1002,Employee,2021-01-11,
+E1004,Ronald,Cottle,,Finance,Payroll Officer,Kingstown,E1002,Employee,2017-09-04,
+E1005,Winston,Ollivierre,,Port Operations,Port Operations Manager,Kingstown,E1001,Employee,2011-02-14,
+E1006,Desmond,Hazell,,Port Operations,Stevedore Supervisor,Kingstown,E1005,Employee,2013-05-06,2026-10-19
